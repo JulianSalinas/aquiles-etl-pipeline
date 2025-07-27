@@ -49,3 +49,7 @@ def extract_measure_and_unit(measure_str):
         return (measure[0][0] if measure else None, measure[0][1] if measure else None, packageUnits[0] if packageUnits else None)
     except Exception as e:
         return (None, None, None)
+    
+if __name__ == "__main__":
+    # Test the functions
+    print(extract_measure_and_unit("Coke 1000mg/5ml"))
