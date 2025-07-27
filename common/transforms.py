@@ -40,3 +40,12 @@ def transform_provider_name(provider_name):
         return separated_name
     except Exception as e:
         return None
+    
+# Define a function to extract the unit of measure and the measure from a given string
+def extract_measure_and_unit(measure_str):
+    try:
+        measure = re.findall(r"(\d+\.?\d*)\s*([a-zA-Z]{1,2})", measure_str)
+        packageUnits =  re.findall(r"[x]\s*(\d+)", measure_str)
+        return (measure[0][0] if measure else None, measure[0][1] if measure else None, packageUnits[0] if packageUnits else None)
+    except Exception as e:
+        return (None, None, None)
