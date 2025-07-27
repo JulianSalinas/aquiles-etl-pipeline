@@ -1,9 +1,9 @@
 import sys
-sys.path.append("/Workspace/Repos/<user-name>/<repo-name>")
+sys.path.append("/Workspace/Repos/js-julian.salinas@outlook.com/aquiles-etl-pipeline")
 
 from pyspark.sql.functions import udf
 from pyspark.sql.types import DecimalType, StringType, StructField, StructType
-from common.transforms import *
+from common.transforms import infer_and_transform_date, transform_price, remove_special_characters, separate_camel_case, transform_provider_name, extract_measure_and_unit
 
 
 # Define the schema for the returned STRUCT type
