@@ -1,6 +1,10 @@
+import sys
+sys.path.append("/Workspace/Repos/<user-name>/<repo-name>")
+
 from pyspark.sql.functions import udf
 from pyspark.sql.types import DecimalType, StringType, StructField, StructType
-from notebooks.transforms import *
+from common.transforms import *
+
 
 # Define the schema for the returned STRUCT type
 measure_unit_schema = StructType([
