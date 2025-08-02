@@ -1,2 +1,2 @@
 # aquiles-etl-pipeline
-Handles of ETL pipelines with PySpark
+Handles of ETL pipelines with Azure Functions
