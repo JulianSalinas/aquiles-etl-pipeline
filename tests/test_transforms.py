@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 from decimal import Decimal
 
 # Add the parent directory to the path so we can import from common
@@ -22,228 +23,197 @@ from common.transforms import (
 )
 
 
+# Pytest markers for categorizing tests
+pytestmark = pytest.mark.transforms
+
+
+@pytest.mark.date
 class TestDateTransforms:
     """Tests for date transformation functions."""
     
-    def test_infer_and_transform_date_valid_formats(self):
+    @pytest.mark.parametrize("input_date,expected", [
+        ("15/03/2024", "2024-03-15"),
+        ("03/15/2024", "2024-03-15"),
+        ("March 15, 2024", "2024-03-15"),
+        ("2024-03-15", "2024-03-15")
+    ])
+    def test_infer_and_transform_date_valid_formats(self, input_date, expected):
         """Test date inference with various valid formats."""
-        # DD/MM/YYYY format
-        assert infer_and_transform_date("15/03/2024") == "2024-03-15"
-        
-        # MM/DD/YYYY format (should be interpreted as day first due to dayfirst=True)
-        assert infer_and_transform_date("03/15/2024") == "2024-03-15"
-        
-        # Text format
-        assert infer_and_transform_date("March 15, 2024") == "2024-03-15"
-        
-        # ISO format
-        assert infer_and_transform_date("2024-03-15") == "2024-03-15"
+        assert infer_and_transform_date(input_date) == expected
     
-    def test_infer_and_transform_date_edge_cases(self):
+    @pytest.mark.parametrize("invalid_input", [
+        "",
+        "not a date",
+        "None"
+    ])
+    def test_infer_and_transform_date_edge_cases(self, invalid_input):
         """Test date inference with edge cases."""
-        # Empty string
-        assert infer_and_transform_date("") is None
-        
-        # Invalid date
-        assert infer_and_transform_date("not a date") is None
-        
-        # None input (converted to string)
-        assert infer_and_transform_date("None") is None
+        assert infer_and_transform_date(invalid_input) is None
 
 
+@pytest.mark.price
 class TestPriceTransforms:
     """Tests for price transformation functions."""
     
-    def test_transform_price_valid_formats(self):
+    @pytest.mark.parametrize("input_price,expected", [
+        ("1000", Decimal("1000")),
+        ("1,000", Decimal("1000")),
+        ("$1,000", Decimal("1000")),
+        ("1.000", Decimal("1000")),
+        ("$ 1.500,50", Decimal("150050"))
+    ])
+    def test_transform_price_valid_formats(self, input_price, expected):
         """Test price transformation with various valid formats."""
-        # Basic price
-        assert transform_price("1000") == Decimal("1000")
-        
-        # Price with commas (thousands separator)
-        assert transform_price("1,000") == Decimal("1000")
-        
-        # Price with dollar sign
-        assert transform_price("$1,000") == Decimal("1000")
-        
-        # Price with decimal points as thousands separators
-        assert transform_price("1.000") == Decimal("1000")
-        
-        # Complex price format
-        assert transform_price("$ 1.500,50") == Decimal("150050")
+        assert transform_price(input_price) == expected
     
-    def test_transform_price_edge_cases(self):
+    @pytest.mark.parametrize("invalid_input", [
+        "",
+        "not a price", 
+        "$.,",
+    ])
+    def test_transform_price_edge_cases(self, invalid_input):
         """Test price transformation with edge cases."""
-        # Empty string
-        assert transform_price("") is None
-        
-        # Invalid price
-        assert transform_price("not a price") is None
-        
-        # Only symbols
-        assert transform_price("$.,") is None
+        assert transform_price(invalid_input) is None
 
 
+@pytest.mark.text
 class TestTextTransforms:
     """Tests for text transformation functions."""
     
-    def test_remove_special_characters_valid(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("Harina@de#Trigo!", "HarinadeTrigo"),
+        ("Producto 100% Natural/Organico", "Producto 100% Natural/Organico"),
+        ("Producto123@#$", "Producto123")
+    ])
+    def test_remove_special_characters_valid(self, input_text, expected):
         """Test removing special characters from text."""
-        # Basic text with special characters
-        assert remove_special_characters("Harina@de#Trigo!") == "HarinadeTrigo"
-        
-        # Text with allowed characters (letters, numbers, /, %, space)
-        assert remove_special_characters("Producto 100% Natural/Organico") == "Producto 100% Natural/Organico"
-        
-        # Text with numbers
-        assert remove_special_characters("Producto123@#$") == "Producto123"
+        assert remove_special_characters(input_text) == expected
     
-    def test_remove_special_characters_edge_cases(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("", ""),
+        ("@#$!", "")
+    ])
+    def test_remove_special_characters_edge_cases(self, input_text, expected):
         """Test removing special characters with edge cases."""
-        # Empty string
-        assert remove_special_characters("") == ""
-        
-        # Only special characters
-        assert remove_special_characters("@#$!") == ""
-        
-        # None should return None (handled by exception)
-        # This would be called with str(None) = "None" in real usage
+        assert remove_special_characters(input_text) == expected
     
-    def test_separate_camel_case_valid(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("HarinaDeTrigo", "Harina De Trigo"),
+        ("Producto123ABC", "Producto 123ABC"),
+        ("Already Separated", "Already Separated"),
+        ("Word", "Word")
+    ])
+    def test_separate_camel_case_valid(self, input_text, expected):
         """Test separating camel case text."""
-        # Basic camel case
-        assert separate_camel_case("HarinaDeTrigo") == "Harina De Trigo"
-        
-        # Camel case with numbers
-        assert separate_camel_case("Producto123ABC") == "Producto 123ABC"
-        
-        # Already separated text
-        assert separate_camel_case("Already Separated") == "Already Separated"
-        
-        # Single word
-        assert separate_camel_case("Word") == "Word"
+        assert separate_camel_case(input_text) == expected
     
-    def test_separate_camel_case_edge_cases(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("", ""),
+        ("lowercase", "lowercase"),
+        ("UPPERCASE", "UPPERCASE")
+    ])
+    def test_separate_camel_case_edge_cases(self, input_text, expected):
         """Test separating camel case with edge cases."""
-        # Empty string
-        assert separate_camel_case("") == ""
-        
-        # All lowercase
-        assert separate_camel_case("lowercase") == "lowercase"
-        
-        # All uppercase
-        assert separate_camel_case("UPPERCASE") == "UPPERCASE"
+        assert separate_camel_case(input_text) == expected
 
 
+@pytest.mark.provider
 class TestProviderTransforms:
     """Tests for provider name transformation functions."""
     
-    def test_transform_provider_name_valid(self):
+    @pytest.mark.parametrize("input_name,expected", [
+        ("ProveedorABC@123", "Proveedor ABC123"),
+        ("MiProveedor", "Mi Proveedor"),
+        ("Proveedor123ABC", "Proveedor 123ABC")
+    ])
+    def test_transform_provider_name_valid(self, input_name, expected):
         """Test provider name transformation."""
-        # Provider with special characters and camel case
-        assert transform_provider_name("ProveedorABC@123") == "Proveedor ABC123"
-        
-        # Simple provider name
-        assert transform_provider_name("MiProveedor") == "Mi Proveedor"
-        
-        # Provider with numbers
-        assert transform_provider_name("Proveedor123ABC") == "Proveedor 123ABC"
+        assert transform_provider_name(input_name) == expected
     
-    def test_transform_provider_name_edge_cases(self):
+    @pytest.mark.parametrize("input_name,expected", [
+        ("", ""),
+        ("@#$!", "")
+    ])
+    def test_transform_provider_name_edge_cases(self, input_name, expected):
         """Test provider name transformation with edge cases."""
-        # Empty string
-        assert transform_provider_name("") == ""
-        
-        # Only special characters
-        assert transform_provider_name("@#$!") == ""
+        assert transform_provider_name(input_name) == expected
     
-    def test_transform_description_valid(self):
+    @pytest.mark.parametrize("input_desc,expected", [
+        ("ProductoEspecial@123", "Producto Especial 123"),
+        ("MiProducto", "Mi Producto")
+    ])
+    def test_transform_description_valid(self, input_desc, expected):
         """Test description transformation."""
-        # Description with special characters and camel case
-        assert transform_description("ProductoEspecial@123") == "Producto Especial 123"
-        
-        # Simple description
-        assert transform_description("MiProducto") == "Mi Producto"
+        assert transform_description(input_desc) == expected
 
 
+@pytest.mark.extraction
 class TestMeasureExtractionFunctions:
     """Tests for measure and unit extraction functions."""
     
-    def test_extract_measure_valid(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("500g de harina", "500"),
+        ("1.5kg arroz", "1.5"),
+        ("500g y 200ml", "500")  # Should get first
+    ])
+    def test_extract_measure_valid(self, input_text, expected):
         """Test measure extraction from text."""
-        # Basic measure
-        assert extract_measure("500g de harina") == "500"
-        
-        # Decimal measure
-        assert extract_measure("1.5kg arroz") == "1.5"
-        
-        # Multiple measures (should get first)
-        assert extract_measure("500g y 200ml") == "500"
+        assert extract_measure(input_text) == expected
     
-    def test_extract_measure_edge_cases(self):
+    @pytest.mark.parametrize("input_text", [
+        "solo texto",
+        ""
+    ])
+    def test_extract_measure_edge_cases(self, input_text):
         """Test measure extraction with edge cases."""
-        # No measure
-        assert extract_measure("solo texto") is None
-        
-        # Empty string
-        assert extract_measure("") is None
+        assert extract_measure(input_text) is None
     
-    def test_extract_unit_valid(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("500g de harina", "g"),
+        ("1.5kg arroz", "kg"),
+        ("200ml agua", "ml")
+    ])
+    def test_extract_unit_valid(self, input_text, expected):
         """Test unit extraction from text."""
-        # Basic unit
-        assert extract_unit("500g de harina") == "g"
-        
-        # Different unit
-        assert extract_unit("1.5kg arroz") == "kg"
-        
-        # Three letter unit
-        assert extract_unit("200ml agua") == "ml"
+        assert extract_unit(input_text) == expected
     
-    def test_extract_unit_edge_cases(self):
+    @pytest.mark.parametrize("input_text", [
+        "solo texto",
+        ""
+    ])
+    def test_extract_unit_edge_cases(self, input_text):
         """Test unit extraction with edge cases."""
-        # No unit
-        assert extract_unit("solo texto") is None
-        
-        # Empty string
-        assert extract_unit("") is None
+        assert extract_unit(input_text) is None
     
-    def test_extract_package_units_valid(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("Arroz x 12 unidades", "12"),
+        ("Producto x 6 piezas", "6"),
+        ("Itemx24", "24")
+    ])
+    def test_extract_package_units_valid(self, input_text, expected):
         """Test package units extraction from text."""
-        # Basic package units
-        assert extract_package_units("Arroz x 12 unidades") == "12"
-        
-        # With spaces
-        assert extract_package_units("Producto x 6 piezas") == "6"
-        
-        # No space after x
-        assert extract_package_units("Itemx24") == "24"
+        assert extract_package_units(input_text) == expected
     
-    def test_extract_package_units_edge_cases(self):
+    @pytest.mark.parametrize("input_text", [
+        "solo producto",
+        ""
+    ])
+    def test_extract_package_units_edge_cases(self, input_text):
         """Test package units extraction with edge cases."""
-        # No package units
-        assert extract_package_units("solo producto") is None
-        
-        # Empty string
-        assert extract_package_units("") is None
+        assert extract_package_units(input_text) is None
     
-    def test_extract_measure_and_unit_combined(self):
+    @pytest.mark.parametrize("input_text,expected", [
+        ("Arroz 500g x 12 unidades", ("500", "g", "12")),
+        ("Harina 1.5kg", ("1.5", "kg", None)),
+        ("Producto x 6", (None, None, "6")),
+        ("Solo texto", (None, None, None))
+    ])
+    def test_extract_measure_and_unit_combined(self, input_text, expected):
         """Test combined measure and unit extraction."""
-        # Complete extraction
-        result = extract_measure_and_unit("Arroz 500g x 12 unidades")
-        assert result == ("500", "g", "12")
-        
-        # Only measure and unit
-        result = extract_measure_and_unit("Harina 1.5kg")
-        assert result == ("1.5", "kg", None)
-        
-        # Only package units
-        result = extract_measure_and_unit("Producto x 6")
-        assert result == (None, None, "6")
-        
-        # Nothing found
-        result = extract_measure_and_unit("Solo texto")
-        assert result == (None, None, None)
+        assert extract_measure_and_unit(input_text) == expected
 
 
+@pytest.mark.removal
 class TestMeasureRemovalFunctions:
     """Tests for measure and unit removal functions."""
     
@@ -297,50 +267,39 @@ class TestMeasureRemovalFunctions:
 
 
 def run_all_tests():
-    """Run all tests manually without pytest."""
-    print("Running Transform Function Tests")
-    print("=" * 50)
+    """Run all tests using pytest with various options."""
+    import subprocess
     
-    test_classes = [
-        TestDateTransforms(),
-        TestPriceTransforms(),
-        TestTextTransforms(),
-        TestProviderTransforms(),
-        TestMeasureExtractionFunctions(),
-        TestMeasureRemovalFunctions()
-    ]
+    print("🧪 Running Transform Function Tests with pytest")
+    print("=" * 60)
     
-    total_tests = 0
-    passed_tests = 0
+    # Run with verbose output and coverage if available
+    result = subprocess.run([
+        'pytest', __file__, 
+        '-v',                   # verbose output
+        '--tb=short',           # shorter traceback format
+        '--durations=10',       # show 10 slowest tests
+        '-x'                    # stop on first failure
+    ], capture_output=True, text=True)
     
-    for test_class in test_classes:
-        class_name = test_class.__class__.__name__
-        print(f"\n{class_name}:")
-        
-        # Get all test methods
-        test_methods = [method for method in dir(test_class) if method.startswith('test_')]
-        
-        for method_name in test_methods:
-            total_tests += 1
-            try:
-                method = getattr(test_class, method_name)
-                method()
-                print(f"  ✅ {method_name}")
-                passed_tests += 1
-            except AssertionError as e:
-                print(f"  ❌ {method_name}: Assertion failed - {e}")
-            except Exception as e:
-                print(f"  ❌ {method_name}: Error - {e}")
+    print(result.stdout)
+    if result.stderr:
+        print("Errors:", result.stderr)
     
-    print(f"\n" + "=" * 50)
-    print(f"Tests completed: {passed_tests}/{total_tests} passed")
-    
-    if passed_tests == total_tests:
-        print("🎉 All tests passed!")
+    # Additional summary
+    if result.returncode == 0:
+        print("\n🎉 All tests passed!")
+        print("💡 You can run specific test categories with:")
+        print("   pytest tests/test_transforms.py -m date")
+        print("   pytest tests/test_transforms.py -m price") 
+        print("   pytest tests/test_transforms.py -m text")
+        print("   pytest tests/test_transforms.py -m provider")
+        print("   pytest tests/test_transforms.py -m extraction")
+        print("   pytest tests/test_transforms.py -m removal")
     else:
-        print(f"⚠️  {total_tests - passed_tests} tests failed")
+        print("\n❌ Some tests failed!")
     
-    return passed_tests == total_tests
+    return result.returncode == 0
 
 
 if __name__ == "__main__":

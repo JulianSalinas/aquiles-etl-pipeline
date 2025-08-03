@@ -32,7 +32,7 @@ def create_azure_sql_engine(server_name, database_name):
     return create_engine(url, connect_args={'attrs_before': token})
 
 
-def test_connection(engine):
+def ensure_connection_established(engine):
     """Test SQL connection with a simple query."""
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1 as test_value")).fetchone()

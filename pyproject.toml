@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --tb=short"
+testpaths = ["tests"]
+markers = [
+    "transforms: marks tests as transform function tests",
+    "date: marks tests as date transformation tests",
+    "price: marks tests as price transformation tests", 
+    "text: marks tests as text transformation tests",
+    "provider: marks tests as provider transformation tests",
+    "extraction: marks tests as measure/unit extraction tests",
+    "removal: marks tests as measure/unit removal tests",
+    "database: marks tests as database-related tests",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests"
+]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
