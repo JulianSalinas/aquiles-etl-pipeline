@@ -11,6 +11,7 @@ markers = [
     "extraction: marks tests as measure/unit extraction tests",
     "removal: marks tests as measure/unit removal tests",
     "database: marks tests as database-related tests",
+    "storage: marks tests as storage-related tests",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests"
 ]

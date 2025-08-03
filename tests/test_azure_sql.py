@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import pytest
 from pathlib import Path
 from sqlalchemy import text
@@ -13,9 +14,25 @@ pytestmark = pytest.mark.database
 
 
 def setup_environment():
-    """Set up environment variables for testing."""
-    os.environ['SQL_SERVER'] = 'provider24-dev.database.windows.net'
-    os.environ['SQL_DATABASE'] = 'provider24'
+    """Set up environment variables for Azure SQL testing."""
+
+    # Try to load from local.settings.json first
+    local_settings_path = Path(__file__).parent.parent / "local.settings.json"
+    if local_settings_path.exists():
+        try:
+            with open(local_settings_path, 'r') as f:
+                settings = json.load(f)
+                for key, value in settings.get('Values', {}).items():
+                    os.environ[key] = value
+        except Exception as e:
+            print(f"Warning: Could not load local.settings.json: {e}")
+    
+    # Verify required environment variables are set
+    required_vars = ['SQL_SERVER', 'SQL_DATABASE']
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+    
+    if missing_vars:
+        raise ValueError(f"Missing required environment variables: {missing_vars}.")
 
 
 @pytest.fixture(scope="session")

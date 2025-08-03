@@ -7,13 +7,11 @@ from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
 
-def get_blob_service_client():
+def get_blob_service_client(storage_account_name):
     """Get Azure Blob Service Client using Azure Default Credential."""
     try:
-        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME', 'provider24')
         account_url = f"https://{storage_account_name}.blob.core.windows.net"
-        
-        # Try to use DefaultAzureCredential first
+
         credential = DefaultAzureCredential()
         blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
         
@@ -21,21 +19,12 @@ def get_blob_service_client():
         return blob_service_client
         
     except Exception as e:
-        logging.error(f"Error creating Blob Service Client with Azure Default Credential: {str(e)}")
-        
-        # Fallback to connection string if available
-        connection_string = os.environ.get('provider24_STORAGE')
-        if connection_string:
-            logging.info("Falling back to connection string authentication for blob storage")
-            return BlobServiceClient.from_connection_string(connection_string)
-        else:
-            raise ValueError("Both Azure Default Credential and connection string failed for blob storage")
+        raise ValueError("Azure Default Credential failed for blob storage")
 
 
-def read_blob_content(container_name, blob_name):
+def read_blob_content(blob_service_client, container_name, blob_name):
     """Read blob content from Azure Storage."""
     try:
-        blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
         
         # Download blob content
@@ -50,10 +39,9 @@ def read_blob_content(container_name, blob_name):
         raise
 
 
-def get_blob_properties(container_name, blob_name):
+def get_blob_properties(blob_service_client, container_name, blob_name):
     """Get blob properties and metadata."""
     try:
-        blob_service_client = get_blob_service_client()
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
         
         properties = blob_client.get_blob_properties()
@@ -72,10 +60,9 @@ def get_blob_properties(container_name, blob_name):
         raise
 
 
-def list_blobs_in_container(container_name, name_starts_with=None):
+def list_blobs_in_container(blob_service_client, container_name, name_starts_with=None):
     """List all blobs in a container."""
     try:
-        blob_service_client = get_blob_service_client()
         container_client = blob_service_client.get_container_client(container_name)
         
         blobs = container_client.list_blobs(name_starts_with=name_starts_with)
