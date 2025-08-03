@@ -5,6 +5,9 @@ import pyodbc
 import io
 import os
 from azure.identity import DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import URL
 from common.transforms import (
     infer_and_transform_date, 
     transform_price, 
@@ -16,7 +19,7 @@ from common.transforms import (
 app = func.FunctionApp()
 
 def get_sql_connection():
-    """Get SQL Server connection using Azure Default Credential."""
+    """Get SQLAlchemy engine using Azure Default Credential."""
     # Debug: Log all environment variables related to SQL
     logging.info("Checking SQL environment variables...")
     server = os.environ.get('SQL_SERVER')
@@ -38,32 +41,73 @@ def get_sql_connection():
         token = credential.get_token("https://database.windows.net/")
         access_token = token.token
         
-        # Build connection string with access token
-        connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+        # Try alternative connection string format
+        try:
+            # Method 1: Direct pyodbc connection string format
+            odbc_connection_string = (
+                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                f"SERVER={server};"
+                f"DATABASE={database};"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
+                f"Connection Timeout=30;"
+            )
+            
+            # Create SQLAlchemy URL from the ODBC connection string
+            connection_string = f"mssql+pyodbc:///?odbc_connect={odbc_connection_string}"
+            
+            logging.info(f"Trying connection method 1 with connection string format")
+            
+            # Create engine with access token
+            engine = create_engine(
+                connection_string,
+                connect_args={
+                    "attrs_before": {
+                        1256: access_token.encode('utf-16le')  # SQL_COPT_SS_ACCESS_TOKEN
+                    }
+                }
+            )
+            
+        except Exception as e1:
+            logging.warning(f"Method 1 failed: {e1}, trying method 2")
+            
+            # Method 2: URL-encoded connection string
+            from urllib.parse import quote_plus
+            
+            odbc_connection_string = (
+                f"DRIVER={{ODBC Driver 18 for SQL Server}};"
+                f"SERVER={server};"
+                f"DATABASE={database};"
+                f"Encrypt=yes;"
+                f"TrustServerCertificate=yes;"
+                f"Connection Timeout=30;"
+            )
+            
+            connection_string = f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_connection_string)}"
+            
+            logging.info(f"Trying connection method 2 with URL encoding")
+            
+            # Create engine with access token
+            engine = create_engine(
+                connection_string,
+                connect_args={
+                    "attrs_before": {
+                        1256: access_token.encode('utf-16le')  # SQL_COPT_SS_ACCESS_TOKEN
+                    }
+                }
+            )
         
-        # Create connection attributes for access token authentication
-        attrs_before = {
-            1256: access_token.encode('utf-16le')  # SQL_COPT_SS_ACCESS_TOKEN
-        }
-        
-        # Create connection with access token
-        conn = pyodbc.connect(connection_string, attrs_before=attrs_before)
+        # Test the connection
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1 as test"))
+            logging.info(f"Connection test result: {result.fetchone()}")
         
         logging.info("Successfully connected to SQL Database using Azure Default Credential")
-        return conn
+        return engine
         
     except Exception as e:
         logging.error(f"Error connecting to SQL Database with Azure Default Credential: {str(e)}")
-        # Fallback to username/password if available
-        username = os.environ.get('SQL_USERNAME')
-        password = os.environ.get('SQL_PASSWORD')
-        
-        if username and password:
-            logging.info("Falling back to username/password authentication")
-            connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
-            return pyodbc.connect(connection_string)
-        else:
-            raise ValueError("Azure Default Credential failed and no username/password provided as fallback")
+        raise ValueError("Azure Default Credential failed")
 
 def apply_transformations(df):
     """Apply data transformations to the DataFrame."""
@@ -120,65 +164,36 @@ def apply_transformations(df):
         raise
 
 def write_to_sql_database(df, table_name="ProductsTemp"):
-    """Write DataFrame to SQL Database."""
+    """Write DataFrame to SQL Database using SQLAlchemy."""
     try:
-        conn = get_sql_connection()
-        cursor = conn.cursor()
+        engine = get_sql_connection()
         
-        # Create table if it doesn't exist (basic structure)
-        create_table_sql = f"""
-        IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='{table_name}' AND xtype='U')
-        CREATE TABLE {table_name} (
-            Id INT IDENTITY(1,1) PRIMARY KEY,
-            RawPrice NVARCHAR(255),
-            CleanPrice DECIMAL(18,2),
-            IsValidPrice BIT,
-            RawLastReviewDt NVARCHAR(255),
-            CleanLastReviewDt DATE,
-            RawDescription NVARCHAR(MAX),
-            CleanDescription NVARCHAR(MAX),
-            Measure NVARCHAR(50),
-            UnitOfMeasure NVARCHAR(50),
-            PackageUnits NVARCHAR(50),
-            RawProviderName NVARCHAR(255),
-            CleanProviderName NVARCHAR(255),
-            ProcessedDt DATETIME DEFAULT GETDATE()
+        # Prepare data for insertion - select only the columns we need
+        columns_to_insert = [
+            'RawPrice', 'CleanPrice', 'IsValidPrice', 'RawLastReviewDt', 'CleanLastReviewDt',
+            'RawDescription', 'CleanDescription', 'Measure', 'UnitOfMeasure', 'PackageUnits',
+            'RawProviderName', 'CleanProviderName'
+        ]
+        
+        # Filter DataFrame to only include columns that exist
+        available_columns = [col for col in columns_to_insert if col in df.columns]
+        df_to_insert = df[available_columns].copy()
+        
+        # Convert boolean to int for SQL Server compatibility
+        if 'IsValidPrice' in df_to_insert.columns:
+            df_to_insert['IsValidPrice'] = df_to_insert['IsValidPrice'].astype(int)
+        
+        # Use pandas to_sql method for efficient bulk insert
+        rows_inserted = df_to_insert.to_sql(
+            name=table_name,
+            con=engine,
+            if_exists='append',
+            index=False,
+            method='multi',
+            chunksize=1000
         )
-        """
-        cursor.execute(create_table_sql)
         
-        # Insert data
-        rows_inserted = 0
-        for index, row in df.iterrows():
-            insert_sql = f"""
-            INSERT INTO {table_name} (
-                RawPrice, CleanPrice, IsValidPrice, RawLastReviewDt, CleanLastReviewDt,
-                RawDescription, CleanDescription, Measure, UnitOfMeasure, PackageUnits,
-                RawProviderName, CleanProviderName
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            
-            cursor.execute(insert_sql, (
-                row.get('RawPrice'),
-                float(row.get('CleanPrice')) if row.get('CleanPrice') is not None else None,
-                row.get('IsValidPrice'),
-                row.get('RawLastReviewDt'),
-                row.get('CleanLastReviewDt'),
-                row.get('RawDescription'),
-                row.get('CleanDescription'),
-                row.get('Measure'),
-                row.get('UnitOfMeasure'),
-                row.get('PackageUnits'),
-                row.get('RawProviderName'),
-                row.get('CleanProviderName')
-            ))
-            rows_inserted += 1
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        logging.info(f"Successfully wrote {rows_inserted} rows to {table_name} table")
+        logging.info(f"Successfully wrote {len(df_to_insert)} rows to {table_name} table using SQLAlchemy")
         
     except Exception as e:
         logging.error(f"Error writing to SQL database: {str(e)}")
@@ -211,4 +226,121 @@ def provider24_elt_blob_trigger(myblob: func.InputStream):
     except Exception as e:
         logging.error(f"Error processing blob {myblob.name}: {str(e)}")
         raise
+
+def get_blob_service_client():
+    """Get Azure Blob Service Client using Azure Default Credential."""
+    try:
+        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME', 'provider24')
+        account_url = f"https://{storage_account_name}.blob.core.windows.net"
+        
+        # Try to use DefaultAzureCredential first
+        credential = DefaultAzureCredential()
+        blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+        
+        logging.info("Successfully created Blob Service Client using Azure Default Credential")
+        return blob_service_client
+        
+    except Exception as e:
+        logging.error(f"Error creating Blob Service Client with Azure Default Credential: {str(e)}")
+        
+        # Fallback to connection string if available
+        connection_string = os.environ.get('provider24_STORAGE')
+        if connection_string:
+            logging.info("Falling back to connection string authentication for blob storage")
+            return BlobServiceClient.from_connection_string(connection_string)
+        else:
+            raise ValueError("Both Azure Default Credential and connection string failed for blob storage")
+
+def read_blob_content(container_name, blob_name):
+    """Read blob content from Azure Storage."""
+    try:
+        blob_service_client = get_blob_service_client()
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        
+        # Download blob content
+        blob_data = blob_client.download_blob()
+        content = blob_data.readall()
+        
+        logging.info(f"Successfully read blob: {blob_name} from container: {container_name}")
+        return content
+        
+    except Exception as e:
+        logging.error(f"Error reading blob {blob_name} from container {container_name}: {str(e)}")
+        raise
+
+@app.route(route="process-csv", methods=["POST"])
+def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HTTP triggered function to process CSV files from Azure Blob Storage.
+    Expects JSON body with: {"container": "container-name", "blob": "blob-name.csv"}
+    """
+    try:
+        logging.info("HTTP trigger function received a request")
+        
+        # Parse request body
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            return func.HttpResponse(
+                "Invalid JSON in request body",
+                status_code=400
+            )
+        
+        if not req_body:
+            return func.HttpResponse(
+                "Request body is required with 'container' and 'blob' parameters",
+                status_code=400
+            )
+        
+        container_name = req_body.get('container')
+        blob_name = req_body.get('blob')
+        
+        if not container_name or not blob_name:
+            return func.HttpResponse(
+                "Both 'container' and 'blob' parameters are required",
+                status_code=400
+            )
+        
+        logging.info(f"Processing request for container: {container_name}, blob: {blob_name}")
+        
+        # Read blob content
+        csv_content = read_blob_content(container_name, blob_name)
+        
+        # Read CSV from blob content
+        df = pd.read_csv(io.BytesIO(csv_content))
+        
+        logging.info(f"Successfully read CSV with {len(df)} rows and {len(df.columns)} columns")
+        logging.info(f"Columns: {list(df.columns)}")
+        
+        # Apply transformations
+        transformed_df = apply_transformations(df)
+        
+        # Write to SQL Database
+        write_to_sql_database(transformed_df)
+        
+        response_data = {
+            "status": "success",
+            "message": f"ETL process completed successfully for blob: {blob_name}",
+            "rows_processed": len(transformed_df),
+            "columns": list(transformed_df.columns)
+        }
+        
+        logging.info(f"ETL process completed successfully for blob: {blob_name}")
+        
+        return func.HttpResponse(
+            body=str(response_data),
+            status_code=200,
+            headers={"Content-Type": "application/json"}
+        )
+        
+    except Exception as e:
+        error_message = f"Error processing request: {str(e)}"
+        logging.error(error_message)
+        
+        return func.HttpResponse(
+            body=f'{{"status": "error", "message": "{error_message}"}}',
+            status_code=500,
+            headers={"Content-Type": "application/json"}
+        )
+
 
