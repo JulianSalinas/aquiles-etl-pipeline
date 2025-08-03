@@ -24,10 +24,8 @@ def get_azure_access_token():
     SQL_COPT_SS_ACCESS_TOKEN = 1256
     return { SQL_COPT_SS_ACCESS_TOKEN: token_struct}
 
-def create_azure_sql_engine():
+def create_azure_sql_engine(server_name, database_name):
     """Create SQLAlchemy engine with Azure AD authentication."""
-    server_name = os.environ['SQL_SERVER']
-    database_name = os.environ['SQL_DATABASE']
     url = get_connection_string(server_name, database_name)
     token = get_azure_access_token()
     return create_engine(url, connect_args={'attrs_before': token})
@@ -41,38 +39,26 @@ def initialize_database(engine):
 def test_azure_sql_connection():
     """Test Azure AD authentication and database access."""
     setup_environment()
-    engine = create_azure_sql_engine()
+    server_name = os.environ['SQL_SERVER']
+    database_name = os.environ['SQL_DATABASE']
+    engine = create_azure_sql_engine(server_name, database_name)
     initialize_database(engine)
     
     try:
         with engine.connect() as conn:
-            # Test basic query
-            result = conn.execute(text("SELECT * FROM UnitOfMeasure")).fetchone()
-            
-            # Test table access
             table_count = conn.execute(text("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES")).fetchone()
-            
-            print(f"✅ Connection successful!")
-            print(f"📊 Database has {table_count[0]} tables")
-            return True
-            
+            print(f"Connection successful!")
+            print(f"Database has {table_count[0]} tables")
+            conn.close()
+
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT COUNT(*) FROM UnitOfMeasure")).fetchone()
+            print(f"Connection successful!")
+            print(f"There are: {result[0]} units of measure")
+            conn.close()
+                   
     except Exception as e:
-        print(f"❌ Connection failed: {e}")
-        return False
-
-
-def main():
-    """Main test execution."""
-    print("Azure AD SQL Connection Test")
-    print("=" * 40)
-    
-    success = test_azure_sql_connection()
-    
-    if success:
-        print("💡 Ready to use in function_app.py")
-    else:
-        print("🔧 Check firewall rules and database permissions")
-
+        print(f"Connection failed: {e}")
 
 if __name__ == "__main__":
-    main()
+    test_azure_sql_connection()
