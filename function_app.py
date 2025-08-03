@@ -4,6 +4,7 @@ import pandas as pd
 import pyodbc
 import io
 import os
+from azure.identity import DefaultAzureCredential
 from common.transforms import (
     infer_and_transform_date, 
     transform_price, 
@@ -15,17 +16,54 @@ from common.transforms import (
 app = func.FunctionApp()
 
 def get_sql_connection():
-    """Get SQL Server connection using environment variables."""
+    """Get SQL Server connection using Azure Default Credential."""
+    # Debug: Log all environment variables related to SQL
+    logging.info("Checking SQL environment variables...")
     server = os.environ.get('SQL_SERVER')
     database = os.environ.get('SQL_DATABASE')
-    username = os.environ.get('SQL_USERNAME')
-    password = os.environ.get('SQL_PASSWORD')
     
-    if not all([server, database, username, password]):
-        raise ValueError("Missing SQL connection environment variables")
+    logging.info(f"SQL_SERVER: {server}")
+    logging.info(f"SQL_DATABASE: {database}")
     
-    connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
-    return pyodbc.connect(connection_string)
+    # Also check if they exist with different casing or prefixes
+    all_env_vars = {k: v for k, v in os.environ.items() if 'SQL' in k.upper()}
+    logging.info(f"All SQL-related environment variables: {all_env_vars}")
+    
+    if not all([server, database]):
+        raise ValueError(f"Missing environment variables - SQL_SERVER: {server}, SQL_DATABASE: {database}")
+    
+    try:
+        # Get access token using DefaultAzureCredential
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://database.windows.net/")
+        access_token = token.token
+        
+        # Build connection string with access token
+        connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+        
+        # Create connection attributes for access token authentication
+        attrs_before = {
+            1256: access_token.encode('utf-16le')  # SQL_COPT_SS_ACCESS_TOKEN
+        }
+        
+        # Create connection with access token
+        conn = pyodbc.connect(connection_string, attrs_before=attrs_before)
+        
+        logging.info("Successfully connected to SQL Database using Azure Default Credential")
+        return conn
+        
+    except Exception as e:
+        logging.error(f"Error connecting to SQL Database with Azure Default Credential: {str(e)}")
+        # Fallback to username/password if available
+        username = os.environ.get('SQL_USERNAME')
+        password = os.environ.get('SQL_PASSWORD')
+        
+        if username and password:
+            logging.info("Falling back to username/password authentication")
+            connection_string = f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
+            return pyodbc.connect(connection_string)
+        else:
+            raise ValueError("Azure Default Credential failed and no username/password provided as fallback")
 
 def apply_transformations(df):
     """Apply data transformations to the DataFrame."""
