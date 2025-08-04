@@ -62,7 +62,6 @@ def write_to_sql_database(df, server_name, database_name, table_name):
             'CleanLastReviewDt',
             'RawDescription', 
             'CleanDescription', 
-            'TransformedDescription', 
             'Measure', 
             'UnitOfMeasure', 
             'PackageUnits',

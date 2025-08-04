@@ -15,7 +15,6 @@ def provider24_elt_blob_trigger(myblob: func.InputStream):
         logging.info(f"BLOB TRIGGER - Processing blob: {myblob.name}")
 
         server_name = os.environ.get('SQL_SERVER')
-
         database_name = os.environ.get('SQL_DATABASE')
         
         csv_content = myblob.read()
@@ -23,14 +22,15 @@ def provider24_elt_blob_trigger(myblob: func.InputStream):
         result = process_csv_from_stream(csv_content, myblob.name, server_name, database_name, "ProductsStep1")
 
         if result["status"] == True:
-            logging.info(f"ETL process completed successfully for blob: {myblob.name}")
+            success_msg = f"ETL process completed successfully for blob: {myblob.name}"
+            logging.info(success_msg)
         else:
-            logging.error(f"ETL process failed for blob: {myblob.name} - {result['message']}")
-            raise Exception(result["message"])
+            error_msg = f"ETL process failed for blob: {myblob.name} - {result['message']}"
+            logging.error(error_msg)
         
     except Exception as e:
-        logging.error(f"Error processing blob {myblob.name}: {str(e)}")
-        raise
+        error_msg = f"Error processing blob {myblob.name}: {str(e)}"
+        logging.error(error_msg)
 
 
 @app.route(route="process-csv", methods=["POST"])
@@ -53,12 +53,15 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         result = process_csv_from_blob(storage_account_name, container_name, blob_name, server_name, database_name, "ProductsStep1")
 
         if result["status"] == True:
-            logging.info(f"ETL process completed successfully for blob: {blob_name}")
+            success_msg = f"ETL process completed successfully for blob: {blob_name}. Rows processed: {result.get('rows_processed', 'N/A')}"
+            logging.info(success_msg)
+            return func.HttpResponse(success_msg,status_code=200)
         else:
-            logging.error(f"ETL process failed for blob: {blob_name} - {result['message']}")
-            raise Exception(result["message"])
-        
-        
+            error_msg = f"ETL process failed for blob: {blob_name} - {result['message']}"
+            logging.error(error_msg)
+            return func.HttpResponse(error_msg, status_code=400)
+
     except Exception as e:
-        logging.error(f"Error processing blob {blob_name}: {str(e)}")
-        raise
+        error_msg = f"Error processing blob {blob_name if 'blob_name' in locals() else 'unknown'}: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
