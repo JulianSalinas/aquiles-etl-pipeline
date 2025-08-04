@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import text
 
 sys.path.append(str(Path(__file__).parent.parent))
-from common.sql_utils import create_azure_sql_engine, ensure_connection_established, initialize_database
+from core.database import create_azure_sql_engine, ensure_connection_established
 
 
 # Pytest markers for categorizing tests
@@ -39,12 +39,10 @@ def setup_environment():
 def azure_sql_engine():
     """Create Azure SQL engine for testing."""
     setup_environment()
-    engine = create_azure_sql_engine(
+    return create_azure_sql_engine(
         os.environ.get('SQL_SERVER'), 
         os.environ.get('SQL_DATABASE')
     )
-    initialize_database(engine)
-    return engine
 
 
 @pytest.mark.integration
