@@ -44,7 +44,7 @@ def ensure_connection_established(engine):
         result = conn.execute(text("SELECT 1 as test_value")).fetchone()
         return result
 
-def write_to_sql_database(df, server_name, database_name, table_name="ProductsTemp"):
+def write_to_sql_database(df, server_name, database_name, table_name):
     """Write DataFrame to SQL Database using SQLAlchemy."""
     try:
         engine = create_azure_sql_engine(server_name, database_name)
@@ -80,15 +80,7 @@ def write_to_sql_database(df, server_name, database_name, table_name="ProductsTe
         if 'IsValidPrice' in df_to_insert.columns:
             df_to_insert['IsValidPrice'] = df_to_insert['IsValidPrice'].astype(int)
         
-        # Use pandas to_sql method for efficient bulk insert
-        rows_inserted = df_to_insert.to_sql(
-            name=table_name,
-            con=engine,
-            if_exists='append',
-            index=False,
-            method='multi',
-            chunksize=1000
-        )
+        df_to_insert.to_sql(table_name, engine, if_exists='replace', index=False)
         
         logging.info(f"✅ Successfully wrote {len(df_to_insert)} rows to {table_name} table")
         return len(df_to_insert)

@@ -44,11 +44,19 @@ def transform_provider_name(provider_name):
         return separated_name
     except Exception as e:
         return None
+
+def capitalize_first_letter(text):
+    """Capitalize the first letter of each word using built-in string methods."""
+    try:
+        if not text or not isinstance(text, str):
+            return text
+        return text.strip().title()
+    except Exception as e:
+        return text
     
 def transform_description(description): 
     try:
-        no_special_chars = remove_special_characters(description)
-        return separate_camel_case(no_special_chars)
+        return capitalize_first_letter(description)
     except Exception as e:
         return None
 

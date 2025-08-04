@@ -1,7 +1,6 @@
 import os
-import azure.functions as func
 import logging
-import json
+import azure.functions as func
 from core.etl_orchestrator import process_csv_from_blob, process_csv_from_stream
 
 app = func.FunctionApp()
@@ -13,20 +12,18 @@ def provider24_elt_blob_trigger(myblob: func.InputStream):
     Reads CSV, applies transformations, and writes to SQL Database.
     """
     try:
-        server_name = os.environ.get('SQL_SERVER')
-        database_name = os.environ.get('SQL_DATABASE')
+        logging.info(f"BLOB TRIGGER - Processing blob: {myblob.name}")
 
-        logging.info(f"Processing blob: {myblob.name}, Size: {myblob.length} bytes")
+        server_name = os.environ.get('SQL_SERVER')
+
+        database_name = os.environ.get('SQL_DATABASE')
         
-        # Read CSV from blob stream
         csv_content = myblob.read()
         
-        # Use core ETL orchestrator to process the data
-        result = process_csv_from_stream(csv_content, myblob.name, server_name, database_name)
+        result = process_csv_from_stream(csv_content, myblob.name, server_name, database_name, "ProductsStep1")
 
-        if result["status"] == "success":
+        if result["status"] == True:
             logging.info(f"ETL process completed successfully for blob: {myblob.name}")
-            logging.info(f"Processed {result['rows_processed']} rows, wrote {result['rows_written']} rows")
         else:
             logging.error(f"ETL process failed for blob: {myblob.name} - {result['message']}")
             raise Exception(result["message"])
@@ -43,54 +40,25 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     Expects JSON body with: {"container": "container-name", "blob": "blob-name.csv"}
     """
     try:
-        logging.info("HTTP trigger function received a request")
-        
-        # Parse request body
-        try:
-            req_body = req.get_json()
-        except ValueError:
-            return func.HttpResponse("Invalid JSON in request body", status_code=400)
-        
-        if not req_body:
-            return func.HttpResponse("Request body is required with 'container' and 'blob' parameters", status_code=400)
+        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')
+        server_name = os.environ.get('SQL_SERVER')
+        database_name = os.environ.get('SQL_DATABASE')
 
+        req_body = req.get_json()
         container_name = req_body.get('container')
         blob_name = req_body.get('blob')
-        
-        if not container_name or not blob_name:
-            return func.HttpResponse("Both 'container' and 'blob' parameters are required", status_code=400)
-        
-        logging.info(f"Processing request for container: {container_name}, blob: {blob_name}")
-        
-        # Use core ETL orchestrator to process the data
-        result = process_csv_from_blob(container_name, blob_name)
-        
-        if result["status"] == "success":
+    
+        logging.info(f"HTTP TRIGGER - Processing blob: {container_name}/{blob_name}")
+
+        result = process_csv_from_blob(storage_account_name, container_name, blob_name, server_name, database_name, "ProductsStep1")
+
+        if result["status"] == True:
             logging.info(f"ETL process completed successfully for blob: {blob_name}")
-            
-            return func.HttpResponse(
-                body=json.dumps(result),
-                status_code=200,
-                headers={"Content-Type": "application/json"}
-            )
         else:
-            logging.error(f"ETL process failed: {result['message']}")
-            
-            return func.HttpResponse(
-                body=json.dumps(result),
-                status_code=500,
-                headers={"Content-Type": "application/json"}
-            )
+            logging.error(f"ETL process failed for blob: {blob_name} - {result['message']}")
+            raise Exception(result["message"])
+        
         
     except Exception as e:
-        error_result = {
-            "status": "error",
-            "message": f"Error processing request: {str(e)}"
-        }
-        logging.error(error_result["message"])
-        
-        return func.HttpResponse(
-            body=json.dumps(error_result),
-            status_code=500,
-            headers={"Content-Type": "application/json"}
-        )
+        logging.error(f"Error processing blob {blob_name}: {str(e)}")
+        raise

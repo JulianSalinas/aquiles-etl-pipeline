@@ -139,11 +139,17 @@ class TestProviderTransforms:
         assert transform_provider_name(input_name) == expected
     
     @pytest.mark.parametrize("input_desc,expected", [
-        ("ProductoEspecial@123", "Producto Especial 123"),
-        ("MiProducto", "Mi Producto")
+        ("ProductoEspecial@123", "Productoespecial@123"),
+        ("MiProducto", "Miproducto"),
+        ("hello world", "Hello World"),
+        ("HELLO WORLD", "Hello World"),
+        ("hello-world test", "Hello-World Test"),
+        ("product description here", "Product Description Here"),
+        ("", ""),
+        ("a", "A")
     ])
     def test_transform_description_valid(self, input_desc, expected):
-        """Test description transformation."""
+        """Test description transformation - only capitalizes using title()."""
         assert transform_description(input_desc) == expected
 
 
