@@ -81,3 +81,19 @@ def list_blobs_in_container(blob_service_client, container_name, name_starts_wit
     except Exception as e:
         logging.error(f"Error listing blobs in container {container_name}: {str(e)}")
         raise
+
+
+def upload_blob_content(blob_service_client, container_name, blob_name, content, content_type="text/csv"):
+    """Upload content to Azure Storage as a blob."""
+    try:
+        blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+        
+        # Upload blob content
+        blob_client.upload_blob(content, overwrite=True, content_settings={'content_type': content_type})
+        
+        logging.info(f"Successfully uploaded blob: {blob_name} to container: {container_name}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error uploading blob {blob_name} to container {container_name}: {str(e)}")
+        raise
