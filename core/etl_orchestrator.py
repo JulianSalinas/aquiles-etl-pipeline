@@ -7,8 +7,9 @@ import io
 import csv
 from datetime import datetime
 from .data_processor import apply_transformations
-from .database import write_to_sql_database
+from .database import create_azure_sql_engine, ensure_connection_established
 from .storage import read_blob_content, get_blob_service_client, upload_blob_content
+
 
 
 def process_csv_from_stream(csv_data, blob_name, server_name, database_name, table_name):
@@ -93,6 +94,49 @@ def process_csv_from_blob(storage_account_name, container_name, blob_name, serve
             "status": False,
             "message": error_message
         }
+
+def write_to_sql_database(df, server_name, database_name, table_name):
+    """Write DataFrame to SQL Database using SQLAlchemy."""
+    try:
+        engine = create_azure_sql_engine(server_name, database_name)
+        
+        result = ensure_connection_established(engine)
+
+        if result is None:
+            raise ValueError("Failed to establish connection to SQL Database")
+        
+        columns_to_insert = [
+            'RawPrice', 
+            'CleanPrice', 
+            'IsValidPrice', 
+            'RawLastReviewDt', 
+            'CleanLastReviewDt',
+            'RawDescription', 
+            'CleanDescription', 
+            'Measure', 
+            'UnitOfMeasure', 
+            'PackageUnits',
+            'RawProviderName', 
+            'CleanProviderName'
+        ]
+        
+        # Filter DataFrame to only include columns that exist
+        available_columns = [col for col in columns_to_insert if col in df.columns]
+        df_to_insert = df[available_columns].copy()
+        
+        # Convert boolean to int for SQL Server compatibility
+        if 'IsValidPrice' in df_to_insert.columns:
+            df_to_insert['IsValidPrice'] = df_to_insert['IsValidPrice'].astype(int)
+        
+        df_to_insert.to_sql(table_name, engine, if_exists='replace', index=False)
+        
+        logging.info(f"✅ Successfully wrote {len(df_to_insert)} rows to {table_name} table")
+        
+        return len(df_to_insert)
+        
+    except Exception as e:
+        logging.error(f"❌ Error writing to SQL database: {str(e)}")
+        raise
 
 
 def extract_invoice_data_from_image(image_content, image_name):

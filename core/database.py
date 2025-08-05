@@ -2,14 +2,11 @@
 Database operations module for SQL Server integration with Azure AD authentication.
 Merged from sql_utils.py for consolidated database functionality.
 """
-import logging
-import pandas as pd
 import urllib
 import struct
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base
 from azure.identity import DefaultAzureCredential
-import os
 
 
 def get_connection_string(server_name, database_name):
@@ -43,47 +40,3 @@ def ensure_connection_established(engine):
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1 as test_value")).fetchone()
         return result
-
-def write_to_sql_database(df, server_name, database_name, table_name):
-    """Write DataFrame to SQL Database using SQLAlchemy."""
-    try:
-        engine = create_azure_sql_engine(server_name, database_name)
-        
-        # Test connection before proceeding
-        result = ensure_connection_established(engine)
-        logging.info(f"✅ SQL connection verified: {result}")
-        
-        # Prepare data for insertion - select only the columns we need
-        columns_to_insert = [
-            'RawPrice', 
-            'CleanPrice', 
-            'IsValidPrice', 
-            'RawLastReviewDt', 
-            'CleanLastReviewDt',
-            'RawDescription', 
-            'CleanDescription', 
-            'Measure', 
-            'UnitOfMeasure', 
-            'PackageUnits',
-            'RawProviderName', 
-            'CleanProviderName'
-        ]
-        
-        # Filter DataFrame to only include columns that exist
-        available_columns = [col for col in columns_to_insert if col in df.columns]
-        df_to_insert = df[available_columns].copy()
-        
-        logging.info(f"Preparing to insert {len(df_to_insert)} rows with columns: {available_columns}")
-        
-        # Convert boolean to int for SQL Server compatibility
-        if 'IsValidPrice' in df_to_insert.columns:
-            df_to_insert['IsValidPrice'] = df_to_insert['IsValidPrice'].astype(int)
-        
-        df_to_insert.to_sql(table_name, engine, if_exists='replace', index=False)
-        
-        logging.info(f"✅ Successfully wrote {len(df_to_insert)} rows to {table_name} table")
-        return len(df_to_insert)
-        
-    except Exception as e:
-        logging.error(f"❌ Error writing to SQL database: {str(e)}")
-        raise

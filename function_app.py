@@ -67,7 +67,7 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(error_msg, status_code=500)
 
 
-@app.blob_trigger(arg_name="invoice_blob", path="invoices", connection="provider24_STORAGE")
+@app.blob_trigger(arg_name="invoice_blob", path="invoices-dev", connection="provider24_STORAGE")
 def invoice_processor_blob_trigger(invoice_blob: func.InputStream):
     """
     Azure Function triggered by blob upload to process invoice images.
