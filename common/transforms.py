@@ -114,3 +114,15 @@ def remove_measure_and_unit(measure_str):
         return s
     except Exception:
         return measure_str
+    
+def extract_iva(description):
+    """Extract IVA percentage from the description."""
+    try:
+        # Look for pattern like (G13), (g13), (G 13), (g 13), or (G1 ) at the end of the description
+        iva_pattern = r'\(\s*[Gg]\s*(\d+)\s*\)'
+        match = re.search(iva_pattern, description)
+        if match:
+            return int(match.group(1))
+        return None
+    except Exception as e:
+        return None

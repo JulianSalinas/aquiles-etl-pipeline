@@ -19,7 +19,8 @@ from common.transforms import (
     extract_measure_and_unit,
     remove_measure,
     remove_package_units,
-    remove_measure_and_unit
+    remove_measure_and_unit,
+    extract_iva
 )
 
 
@@ -272,6 +273,74 @@ class TestMeasureRemovalFunctions:
         assert result == "Producto Normal"
 
 
+@pytest.mark.iva
+class TestIVAExtractionFunctions:
+    """Tests for IVA percentage extraction functions."""
+    
+    @pytest.mark.parametrize("description,expected_iva", [
+        ("MINI PAPA KITTY 1X30(G13)", 13),
+        ("KIKUA CHIPOTLE KITTY 1X25(G13)", 13),
+        ("GUSITITOS SALSA Y QUESO BD 17G 1X12(G13)", 13),
+        ("GUSITITOS SUPER CHOMBO BD 15G 1X12(G13)", 13),
+        ("QUESITRIX SALSA PICANTE BD 10 G 1X12(G13)", 13),
+        ("BUENACHOS SALSAPEÑO BD 18G 1X 12(G13)", 13),
+        ("BORRACHO GUAYABA MOANA 1X24(G 13)", 13),
+        ("ROSCA QUESO MOANA 1X24(G1)", 1),
+        ("PALO QUESO MOANA 1X30(G1)", 1),
+        ("ARGOLLADO PREMIUM DELI 1X32(G 13)", 13),
+        ("TAPON MARSELLEZA 1X26(G13)", 13),
+        ("EMPANADA PINA KEYMAR 1X40(G1)", 1),
+        ("GALLETA NATILLA MOANA 1X28(G1 )", 1),
+    ])
+    def test_extract_iva_valid_patterns(self, description, expected_iva):
+        """Test IVA extraction with valid patterns from real data."""
+        result = extract_iva(description)
+        assert result == expected_iva
+    
+    @pytest.mark.parametrize("description,expected_iva", [
+        ("PRODUCTO (g13)", 13),  # lowercase g
+        ("PRODUCTO (g1)", 1),    # lowercase g with single digit
+        ("PRODUCTO (g 13)", 13), # lowercase g with space
+        ("PRODUCTO (g1 )", 1),   # lowercase g with trailing space
+        ("PRODUCTO ( g1 )", 1),   # lowercase g with trailing spaces
+    ])
+    def test_extract_iva_case_insensitive(self, description, expected_iva):
+        """Test IVA extraction with case-insensitive patterns."""
+        result = extract_iva(description)
+        assert result == expected_iva
+    
+    @pytest.mark.parametrize("description", [
+        "PRODUCTO SIN IVA",
+        "DESCRIPCION NORMAL",
+        "PRODUCTO CON MEDIDA 500g",
+        "OTRO PRODUCTO (SIN G)",
+        "PRODUCTO (G)",  # G without number
+        "",
+        None
+    ])
+    def test_extract_iva_no_pattern(self, description):
+        """Test IVA extraction when no valid pattern is found."""
+        result = extract_iva(description)
+        assert result is None
+    
+    def test_extract_iva_edge_cases(self):
+        """Test IVA extraction with edge cases."""
+        # Multiple G patterns (should find the first one)
+        result = extract_iva("PRODUCTO (G5) OTRO (G13)")
+        assert result == 5
+        
+        # Different case sensitivity - both should work
+        result = extract_iva("PRODUCTO (g13)")  # lowercase g
+        assert result == 13  # Should now match lowercase
+        
+        result = extract_iva("PRODUCTO (G13)")  # uppercase G
+        assert result == 13  # Should still match uppercase
+        
+        # Numbers with multiple digits
+        result = extract_iva("PRODUCTO (G123)")
+        assert result == 123
+
+
 def run_all_tests():
     """Run all tests using pytest with various options."""
     import subprocess
@@ -302,6 +371,7 @@ def run_all_tests():
         print("   pytest tests/test_transforms.py -m provider")
         print("   pytest tests/test_transforms.py -m extraction")
         print("   pytest tests/test_transforms.py -m removal")
+        print("   pytest tests/test_transforms.py -m iva")
     else:
         print("\n❌ Some tests failed!")
     

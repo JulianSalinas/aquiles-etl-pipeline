@@ -8,7 +8,8 @@ from common.transforms import (
     transform_price, 
     transform_provider_name, 
     transform_description,
-    extract_measure_and_unit
+    extract_measure_and_unit,
+    extract_iva
 )
 
 
@@ -20,7 +21,8 @@ def apply_transformations(df):
             'Producto': 'Description',
             'Fecha 1': 'LastReviewDt', 
             'Provedor': 'ProviderName',
-            'Precio': 'Price'
+            'Precio': 'Price',
+            "IVA": "PercentageIVA"
         }
         
         # Rename columns if they exist
@@ -52,7 +54,9 @@ def apply_transformations(df):
             df['UnitOfMeasure'] = measure_unit_data.apply(lambda x: x[1].lower() if x and x[1] else None)
             df['PackageUnits'] = measure_unit_data.apply(lambda x: x[2] if x else None)
             
-        
+            if 'PercentageIVA' in df.columns:
+                df['PercentageIVA'] = df['Description'].apply(lambda x: extract_iva(str(x)) if pd.notna(x) else None)
+                
         # Apply provider name transformations
         if 'ProviderName' in df.columns:
             df['RawProviderName'] = df['ProviderName'].astype(str)

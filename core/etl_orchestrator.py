@@ -117,7 +117,8 @@ def write_to_sql_database(df, server_name, database_name, table_name):
             'UnitOfMeasure', 
             'PackageUnits',
             'RawProviderName', 
-            'CleanProviderName'
+            'CleanProviderName',
+            'PercentageIVA'
         ]
         
         # Filter DataFrame to only include columns that exist
@@ -128,10 +129,10 @@ def write_to_sql_database(df, server_name, database_name, table_name):
         if 'IsValidPrice' in df_to_insert.columns:
             df_to_insert['IsValidPrice'] = df_to_insert['IsValidPrice'].astype(int)
         
-        df_to_insert.to_sql(table_name, engine, if_exists='replace', index=False)
+        df_to_insert.to_sql(table_name, engine, if_exists='append', index=False)
         
         logging.info(f"✅ Successfully wrote {len(df_to_insert)} rows to {table_name} table")
-        
+
         return len(df_to_insert)
         
     except Exception as e:
