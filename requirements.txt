@@ -9,3 +9,4 @@ python-dateutil
 azure-identity
 sqlalchemy
 azure-storage-blob
+requests
