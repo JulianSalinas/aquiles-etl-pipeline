@@ -1,0 +1,73 @@
+erDiagram
+    FileStatus {
+        int Id PK
+        string StatusName
+    }
+
+    ProcessFile {
+        int Id PK
+        string Container
+        string FileName
+        int StatusId FK
+        datetime2 ProcessDt
+        bigint BlobSize
+        string ContentType
+        datetime2 CreatedDt
+        datetime2 LastModifiedDt
+        string ETag
+        string Metadata
+    }
+
+    Product {
+        int Id PK
+        string ProductName
+        string Description
+        decimal Price
+        int Quantity
+        decimal Measure
+        int UnitOfMeasureId FK
+        datetime CreatedDt
+        datetime UpdatedDt
+    }
+
+    Provider {
+        int Id PK
+        string Name
+        datetime CreateDt
+    }
+
+    Provider_Product {
+        int Id PK
+        int ProductId FK
+        int ProviderId FK
+        datetime2 LastReviewDt
+        int PackageUnits
+        decimal IVA
+        bit IsValidated
+    }
+
+    UnitOfMeasure {
+        int Id PK
+        string Acronym
+        string Name
+    }
+
+    ProviderSynonym {
+        int Id PK
+        string Synonym
+        int ProviderId FK
+    }
+
+    UnitOfMeasureAcronym {
+        int Id PK
+        string Acronym
+        int UnitOfMeasureId FK
+    }
+
+    FileStatus ||--o{ ProcessFile : "StatusId"
+    ProcessFile }o--|| FileStatus : "StatusId"
+    Product }o--|| UnitOfMeasure : "UnitOfMeasureId"
+    Provider_Product }o--|| Product : "ProductId"
+    Provider_Product }o--|| Provider : "ProviderId"
+    ProviderSynonym }o--|| Provider : "ProviderId"
+    UnitOfMeasureAcronym }o--|| UnitOfMeasure : "UnitOfMeasureId"
