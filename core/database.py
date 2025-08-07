@@ -40,3 +40,4 @@ def ensure_connection_established(engine):
     with engine.connect() as conn:
         result = conn.execute(text("SELECT 1 as test_value")).fetchone()
         return result
+    
