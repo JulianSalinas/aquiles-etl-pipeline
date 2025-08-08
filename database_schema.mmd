@@ -71,3 +71,39 @@ erDiagram
     Provider_Product }o--|| Provider : "ProviderId"
     ProviderSynonym }o--|| Provider : "ProviderId"
     UnitOfMeasureAcronym }o--|| UnitOfMeasure : "UnitOfMeasureId"
+
+    %% Staging tables
+    Staging_Provider {
+        int Id PK
+        string Name
+        guid BatchGuid
+        datetime2 CreateDt
+    }
+
+    Staging_Product {
+        int Id PK
+        string ProductName
+        string Description
+        decimal Price
+        int Quantity
+        decimal Measure
+        int UnitOfMeasureId
+        guid BatchGuid
+        datetime2 CreatedDt
+        datetime2 UpdatedDt
+    }
+
+    Staging_Provider_Product {
+        int Id PK
+        int ProductId
+        int ProviderId
+        datetime2 LastReviewDt
+        int PackageUnits
+        decimal IVA
+        bit IsValidated
+        guid BatchGuid
+    }
+
+    %% Relationships for staging tables (no FKs, but logical links)
+    Staging_Provider_Product }o--|| Staging_Product : "ProductId"
+    Staging_Provider_Product }o--|| Staging_Provider : "ProviderId"
