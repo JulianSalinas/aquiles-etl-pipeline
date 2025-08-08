@@ -7,23 +7,25 @@ from unittest.mock import Mock, patch
 from core.etl_orchestrator import (
     check_process_file_status,
     normalize_to_staging_tables,
+    normalize_to_staging_tables_from_dataframe,
     get_or_create_unit_of_measure,
     extract_invoice_data_with_openai,
-    process_from_products_step1
+    process_from_products_step1,
+    process_invoice_image_direct
 )
 
 
 class TestETLPipeline:
     """Test cases for ETL pipeline functionality."""
     
-    def test_check_process_file_status_not_exists(self):
+    @patch('core.etl_orchestrator.Session')
+    def test_check_process_file_status_not_exists(self, mock_session):
         """Test checking ProcessFile status when file doesn't exist."""
         mock_engine = Mock()
-        mock_conn = Mock()
-        mock_engine.connect.return_value = mock_conn
-        mock_conn.__enter__ = Mock(return_value=mock_conn)
-        mock_conn.__exit__ = Mock(return_value=None)
-        mock_conn.execute.return_value.fetchone.return_value = None
+        mock_session_instance = Mock()
+        mock_session.return_value.__enter__ = Mock(return_value=mock_session_instance)
+        mock_session.return_value.__exit__ = Mock(return_value=None)
+        mock_session_instance.query.return_value.filter_by.return_value.first.return_value = None
         
         result = check_process_file_status(mock_engine, "test-container", "test-file.csv")
         
@@ -31,14 +33,19 @@ class TestETLPipeline:
         assert result["status_id"] is None
         assert result["id"] is None
     
-    def test_check_process_file_status_exists(self):
+    @patch('core.etl_orchestrator.Session')
+    def test_check_process_file_status_exists(self, mock_session):
         """Test checking ProcessFile status when file exists."""
         mock_engine = Mock()
-        mock_conn = Mock()
-        mock_engine.connect.return_value = mock_conn
-        mock_conn.__enter__ = Mock(return_value=mock_conn)
-        mock_conn.__exit__ = Mock(return_value=None)
-        mock_conn.execute.return_value.fetchone.return_value = (123, 3)  # ID=123, Status=3
+        mock_session_instance = Mock()
+        mock_session.return_value.__enter__ = Mock(return_value=mock_session_instance)
+        mock_session.return_value.__exit__ = Mock(return_value=None)
+        
+        # Mock ProcessFile object
+        mock_process_file = Mock()
+        mock_process_file.StatusId = 3
+        mock_process_file.Id = 123
+        mock_session_instance.query.return_value.filter_by.return_value.first.return_value = mock_process_file
         
         result = check_process_file_status(mock_engine, "test-container", "test-file.csv")
         
@@ -46,14 +53,18 @@ class TestETLPipeline:
         assert result["status_id"] == 3
         assert result["id"] == 123
     
-    def test_get_or_create_unit_of_measure_exists(self):
+    @patch('core.etl_orchestrator.Session')
+    def test_get_or_create_unit_of_measure_exists(self, mock_session):
         """Test getting existing unit of measure."""
         mock_engine = Mock()
-        mock_conn = Mock()
-        mock_engine.connect.return_value = mock_conn
-        mock_conn.__enter__ = Mock(return_value=mock_conn)
-        mock_conn.__exit__ = Mock(return_value=None)
-        mock_conn.execute.return_value.fetchone.return_value = (5,)  # UnitId=5
+        mock_session_instance = Mock()
+        mock_session.return_value.__enter__ = Mock(return_value=mock_session_instance)
+        mock_session.return_value.__exit__ = Mock(return_value=None)
+        
+        # Mock existing unit of measure
+        mock_unit = Mock()
+        mock_unit.Id = 5
+        mock_session_instance.query.return_value.filter.return_value.first.return_value = mock_unit
         
         result = get_or_create_unit_of_measure(mock_engine, "kg")
         
@@ -146,10 +157,11 @@ class TestDataValidation:
             uuid.UUID(batch_guid)  # This will raise ValueError if not valid UUID
             assert len(batch_guid) == 36  # Standard UUID string length
     
-    def test_error_handling_in_normalization(self):
+    @patch('core.etl_orchestrator.read_from_products_step1')
+    def test_error_handling_in_normalization(self, mock_read_products):
         """Test error handling in normalization process."""
         mock_engine = Mock()
-        mock_engine.connect.side_effect = Exception("Database connection failed")
+        mock_read_products.side_effect = Exception("Database connection failed")
         
         with pytest.raises(Exception, match="Database connection failed"):
             normalize_to_staging_tables(mock_engine, "test-batch-guid")

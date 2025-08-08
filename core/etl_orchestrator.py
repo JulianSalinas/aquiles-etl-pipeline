@@ -214,9 +214,97 @@ def get_or_create_unit_of_measure(engine, unit_acronym):
         raise
 
 
+def normalize_to_staging_tables_from_dataframe(engine, df, batch_guid):
+    """
+    Normalize data from DataFrame (ProductsStep1 equivalent) into staging tables.
+    Uses pandas bulk operations for better performance.
+    
+    Args:
+        engine: SQLAlchemy engine
+        df (pandas.DataFrame): Transformed data DataFrame
+        batch_guid (str): Batch GUID for tracking this batch
+    
+    Returns:
+        dict: Summary of records inserted into each staging table
+    """
+    try:
+        if df.empty:
+            logging.info("No data provided to normalize")
+            return {"providers": 0, "products": 0, "provider_products": 0}
+        
+        # Prepare provider data
+        unique_providers = df['CleanProviderName'].dropna().unique()
+        if len(unique_providers) > 0:
+            provider_df = pd.DataFrame({
+                'Name': unique_providers,
+                'BatchGuid': batch_guid
+            })
+            provider_df.to_sql('Provider', engine, schema='Staging', if_exists='append', index=False)
+            providers_inserted = len(unique_providers)
+        else:
+            providers_inserted = 0
+            
+        # Prepare product data
+        product_df = df[['CleanDescription', 'RawDescription', 'CleanPrice', 'Measure', 'UnitOfMeasure']].copy()
+        product_df = product_df.dropna(subset=['CleanDescription'])
+        
+        if not product_df.empty:
+            # Get or create unit of measure IDs
+            product_df['UnitOfMeasureId'] = product_df['UnitOfMeasure'].apply(
+                lambda x: get_or_create_unit_of_measure(engine, x) if pd.notna(x) else None
+            )
+            
+            # Prepare for staging
+            product_staging_df = pd.DataFrame({
+                'ProductName': product_df['CleanDescription'],
+                'Description': product_df['RawDescription'],
+                'Price': product_df['CleanPrice'],
+                'Measure': product_df['Measure'],
+                'UnitOfMeasureId': product_df['UnitOfMeasureId'],
+                'BatchGuid': batch_guid
+            })
+            
+            product_staging_df.to_sql('Product', engine, schema='Staging', if_exists='append', index=False)
+            products_inserted = len(product_staging_df)
+        else:
+            products_inserted = 0
+            
+        # Prepare provider_product data  
+        provider_product_df = df[['CleanLastReviewDt', 'PackageUnits', 'PercentageIVA']].copy()
+        
+        if not provider_product_df.empty:
+            provider_product_staging_df = pd.DataFrame({
+                'ProductId': 0,  # Will be updated in merge process
+                'ProviderId': 0,  # Will be updated in merge process  
+                'LastReviewDt': provider_product_df['CleanLastReviewDt'],
+                'PackageUnits': provider_product_df['PackageUnits'],
+                'IVA': provider_product_df['PercentageIVA'],
+                'IsValidated': 0,
+                'BatchGuid': batch_guid
+            })
+            
+            provider_product_staging_df.to_sql('Provider_Product', engine, schema='Staging', if_exists='append', index=False)
+            provider_products_inserted = len(provider_product_staging_df)
+        else:
+            provider_products_inserted = 0
+            
+        logging.info(f"Normalized data to staging tables - Providers: {providers_inserted}, Products: {products_inserted}, Provider_Products: {provider_products_inserted}")
+        return {
+            "providers": providers_inserted,
+            "products": products_inserted,
+            "provider_products": provider_products_inserted
+        }
+    except Exception as e:
+        logging.error(f"Error normalizing to staging tables: {str(e)}")
+        raise
+
+
 def normalize_to_staging_tables(engine, batch_guid):
     """
     Read data from ProductsStep1 and normalize into staging tables.
+    
+    DEPRECATED: This function reads from ProductsStep1 table. 
+    Use normalize_to_staging_tables_from_dataframe() instead for better performance.
     
     Args:
         engine: SQLAlchemy engine
@@ -228,44 +316,7 @@ def normalize_to_staging_tables(engine, batch_guid):
     try:
         # Read data from ProductsStep1
         df = read_from_products_step1(engine)
-        if df.empty:
-            logging.info("No data found in ProductsStep1 table")
-            return {"providers": 0, "products": 0, "provider_products": 0}
-        providers_inserted = 0
-        products_inserted = 0
-        provider_products_inserted = 0
-        # Use session for inserts
-        with engine.begin() as conn:
-            # Providers
-            unique_providers = df['CleanProviderName'].dropna().unique()
-            for provider_name in unique_providers:
-                conn.execute(text("INSERT INTO Staging.Provider (Name, BatchGuid) VALUES (:name, :batch_guid)"), {"name": provider_name, "batch_guid": batch_guid})
-                providers_inserted += 1
-            # Products and Provider_Product
-            for _, row in df.iterrows():
-                unit_id = get_or_create_unit_of_measure(engine, row.get('UnitOfMeasure'))
-                conn.execute(text("INSERT INTO Staging.Product (ProductName, Description, Price, Measure, UnitOfMeasureId, BatchGuid) VALUES (:product_name, :description, :price, :measure, :unit_id, :batch_guid)"), {
-                    "product_name": row.get('CleanDescription', ''),
-                    "description": row.get('RawDescription', ''),
-                    "price": row.get('CleanPrice'),
-                    "measure": row.get('Measure'),
-                    "unit_id": unit_id,
-                    "batch_guid": batch_guid
-                })
-                products_inserted += 1
-                conn.execute(text("INSERT INTO Staging.Provider_Product (ProductId, ProviderId, LastReviewDt, PackageUnits, IVA, BatchGuid) VALUES (0, 0, :last_review_dt, :package_units, :iva, :batch_guid)"), {
-                    "last_review_dt": row.get('CleanLastReviewDt'),
-                    "package_units": row.get('PackageUnits'),
-                    "iva": row.get('PercentageIVA'),
-                    "batch_guid": batch_guid
-                })
-                provider_products_inserted += 1
-        logging.info(f"Normalized data to staging tables - Providers: {providers_inserted}, Products: {products_inserted}, Provider_Products: {provider_products_inserted}")
-        return {
-            "providers": providers_inserted,
-            "products": products_inserted,
-            "provider_products": provider_products_inserted
-        }
+        return normalize_to_staging_tables_from_dataframe(engine, df, batch_guid)
     except Exception as e:
         logging.error(f"Error normalizing to staging tables: {str(e)}")
         raise
@@ -457,6 +508,9 @@ def process_from_products_step1(server_name, database_name):
         if result is None:
             raise ValueError("Failed to establish connection to SQL Database")
         
+        # Create staging tables if they don't exist
+        create_staging_tables(engine)
+        
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
         logging.info(f"Generated batch GUID: {batch_guid}")
@@ -500,13 +554,14 @@ def process_from_products_step1(server_name, database_name):
 def process_csv_from_stream(csv_data, blob_name, server_name, database_name, table_name):
     """
     Internal function to process CSV data (common logic for both blob and stream processing).
+    This version eliminates writing to ProductsStep1 table and processes data in-memory.
     
     Args:
         csv_data: CSV data as bytes or stream
         blob_name (str): Name of the source blob (for logging)
         server_name (str): SQL Server name
         database_name (str): SQL Database name
-        table_name (str): Target database table name
+        table_name (str): Target database table name (DEPRECATED - ProductsStep1 no longer used)
 
     Returns:
         dict: Processing results and summary
@@ -554,16 +609,19 @@ def process_csv_from_stream(csv_data, blob_name, server_name, database_name, tab
         logging.info("Applying data transformations...")
         transformed_df = apply_transformations(df)
         
-        logging.info("Writing to SQL database...")
-        rows_written = write_to_sql_database(transformed_df, server_name, database_name, table_name)
+        # OPTIMIZATION: Skip writing to ProductsStep1 table, process directly in-memory
+        logging.info("Processing data directly to staging tables (skipping ProductsStep1)...")
+        
+        # Create staging tables if they don't exist
+        create_staging_tables(engine)
         
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
         logging.info(f"Generated batch GUID: {batch_guid}")
         
-        # Normalize data from ProductsStep1 to staging tables
+        # Normalize data directly from DataFrame to staging tables
         logging.info("Normalizing data to staging tables...")
-        staging_summary = normalize_to_staging_tables(engine, batch_guid)
+        staging_summary = normalize_to_staging_tables_from_dataframe(engine, transformed_df, batch_guid)
         
         # Merge staging data to fact tables
         logging.info("Merging staging data to fact tables...")
@@ -578,7 +636,7 @@ def process_csv_from_stream(csv_data, blob_name, server_name, database_name, tab
             "status": True,
             "message": f"ETL process completed successfully for blob: {blob_name}",
             "rows_processed": len(transformed_df),
-            "rows_written": rows_written,
+            "rows_written": staging_summary["providers"] + staging_summary["products"] + staging_summary["provider_products"],
             "batch_guid": batch_guid,
             "staging_summary": staging_summary
         }
@@ -775,6 +833,95 @@ def generate_csv_from_invoice_data(products_data, trigger_date):
     except Exception as e:
         logging.error(f"Error generating CSV from invoice data: {str(e)}")
         raise
+
+
+def process_invoice_image_direct(image_content, image_name, server_name, database_name):
+    """
+    Complete invoice processing pipeline that processes data directly without intermediate CSV storage.
+    Ensures data convergence by using the same transformation pipeline as CSV processing.
+    
+    Args:
+        image_content: Binary content of the invoice image
+        image_name: Name of the image file
+        server_name: SQL Server name
+        database_name: SQL Database name
+    
+    Returns:
+        dict: Processing results and summary
+    """
+    try:
+        logging.info(f"Starting direct invoice processing for image: {image_name}")
+        
+        # Extract data from invoice image using OpenAI
+        logging.info("Extracting data from invoice image...")
+        products_data = extract_invoice_data_with_openai(image_content, image_name)
+        
+        # Generate timestamp for the processing
+        trigger_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Convert invoice data to DataFrame (same structure as CSV)
+        logging.info("Converting invoice data to DataFrame...")
+        invoice_df = pd.DataFrame([
+            {
+                "Producto": product.get("Producto", ""),
+                "Fecha 1": trigger_date,
+                "Provedor": product.get("Provedor", ""), 
+                "Precio": product.get("Precio", ""),
+                "Porcentaje de IVA": product.get("Porcentaje de IVA", "")
+            }
+            for product in products_data
+        ])
+        
+        if invoice_df.empty:
+            raise ValueError("No products extracted from invoice")
+        
+        logging.info(f"Created DataFrame with {len(invoice_df)} rows and {len(invoice_df.columns)} columns")
+        logging.info(f"Columns: {list(invoice_df.columns)}")
+        
+        # Apply same transformations as CSV processing (ensuring data convergence)
+        logging.info("Applying data transformations...")
+        transformed_df = apply_transformations(invoice_df)
+        
+        # Create database engine and ensure connection
+        engine = create_azure_sql_engine(server_name, database_name)
+        result = ensure_connection_established(engine)
+        if result is None:
+            raise ValueError("Failed to establish connection to SQL Database")
+        
+        # Create staging tables if they don't exist
+        create_staging_tables(engine)
+        
+        # Generate batch GUID for this processing batch
+        batch_guid = str(uuid.uuid4())
+        logging.info(f"Generated batch GUID: {batch_guid}")
+        
+        # Normalize data directly from DataFrame to staging tables
+        logging.info("Normalizing data to staging tables...")
+        staging_summary = normalize_to_staging_tables_from_dataframe(engine, transformed_df, batch_guid)
+        
+        # Merge staging data to fact tables
+        logging.info("Merging staging data to fact tables...")
+        merge_staging_to_fact_tables(engine, batch_guid)
+        
+        logging.info(f"Direct invoice processing completed successfully for: {image_name}")
+
+        return {
+            "status": True,
+            "message": f"Direct invoice processing completed successfully for: {image_name}",
+            "products_extracted": len(products_data),
+            "rows_processed": len(transformed_df),
+            "batch_guid": batch_guid,
+            "staging_summary": staging_summary
+        }
+        
+    except Exception as e:
+        error_message = f"Direct invoice processing failed for {image_name}: {str(e)}"
+        logging.error(error_message)
+        
+        return {
+            "status": False,
+            "message": error_message
+        }
 
 
 def process_invoice_image(image_content, image_name, storage_account_name, output_container):
