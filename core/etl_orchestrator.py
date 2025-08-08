@@ -9,6 +9,8 @@ import uuid
 import os
 from datetime import datetime
 from sqlalchemy import text
+from sqlalchemy.orm import Session
+from models.process_file import ProcessFile
 from .data_processor import apply_transformations
 from .database import create_azure_sql_engine, ensure_connection_established
 from .storage import read_blob_content, get_blob_service_client, upload_blob_content
@@ -27,19 +29,12 @@ def check_process_file_status(engine, container, filename):
         dict: {"exists": bool, "status_id": int or None, "id": int or None}
     """
     try:
-        with engine.connect() as conn:
-            query = text("""
-                SELECT Id, StatusId 
-                FROM ProcessFile 
-                WHERE Container = :container AND FileName = :filename
-            """)
-            result = conn.execute(query, {"container": container, "filename": filename}).fetchone()
-            
-            if result:
-                return {"exists": True, "status_id": result[1], "id": result[0]}
+        with Session(engine) as session:
+            pf = session.query(ProcessFile).filter_by(Container=container, FileName=filename).first()
+            if pf:
+                return {"exists": True, "status_id": pf.StatusId, "id": pf.Id}
             else:
                 return {"exists": False, "status_id": None, "id": None}
-                
     except Exception as e:
         logging.error(f"Error checking ProcessFile status: {str(e)}")
         raise
@@ -64,28 +59,23 @@ def insert_process_file_record(engine, container, filename, blob_size, content_t
         int: ID of the inserted record
     """
     try:
-        with engine.connect() as conn:
-            query = text("""
-                INSERT INTO ProcessFile (Container, FileName, StatusId, ProcessDt, BlobSize, ContentType, CreatedDt, LastModifiedDt, ETag, Metadata)
-                OUTPUT INSERTED.Id
-                VALUES (:container, :filename, 2, GETDATE(), :blob_size, :content_type, :created_dt, :last_modified_dt, :etag, :metadata)
-            """)
-            result = conn.execute(query, {
-                "container": container,
-                "filename": filename, 
-                "blob_size": blob_size,
-                "content_type": content_type,
-                "created_dt": created_dt,
-                "last_modified_dt": last_modified_dt,
-                "etag": etag,
-                "metadata": metadata
-            })
-            
-            inserted_id = result.fetchone()[0]
-            conn.commit()
-            logging.info(f"Inserted ProcessFile record with ID {inserted_id} for {container}/{filename}")
-            return inserted_id
-            
+        with Session(engine) as session:
+            pf = ProcessFile(
+                Container=container,
+                FileName=filename,
+                StatusId=2,  # In Progress
+                ProcessDt=datetime.now(),
+                BlobSize=blob_size,
+                ContentType=content_type,
+                CreatedDt=created_dt,
+                LastModifiedDt=last_modified_dt,
+                ETag=etag,
+                Metadata=metadata
+            )
+            session.add(pf)
+            session.commit()
+            logging.info(f"Inserted ProcessFile record with ID {pf.Id} for {container}/{filename}")
+            return pf.Id
     except Exception as e:
         logging.error(f"Error inserting ProcessFile record: {str(e)}")
         raise
@@ -101,16 +91,15 @@ def update_process_file_status(engine, process_file_id, status_id):
         status_id (int): New status ID (3 = Success)
     """
     try:
-        with engine.connect() as conn:
-            query = text("""
-                UPDATE ProcessFile 
-                SET StatusId = :status_id, ProcessDt = GETDATE()
-                WHERE Id = :process_file_id
-            """)
-            conn.execute(query, {"status_id": status_id, "process_file_id": process_file_id})
-            conn.commit()
-            logging.info(f"Updated ProcessFile ID {process_file_id} to status {status_id}")
-            
+        with Session(engine) as session:
+            pf = session.query(ProcessFile).filter_by(Id=process_file_id).first()
+            if pf:
+                pf.StatusId = status_id
+                pf.ProcessDt = datetime.now()
+                session.commit()
+                logging.info(f"Updated ProcessFile ID {process_file_id} to status {status_id}")
+            else:
+                logging.warning(f"ProcessFile ID {process_file_id} not found for status update")
     except Exception as e:
         logging.error(f"Error updating ProcessFile status: {str(e)}")
         raise
@@ -121,6 +110,7 @@ def create_staging_tables(engine):
     Create staging tables if they don't exist.
     """
     try:
+        # DDL is not supported by ORM, so we keep raw SQL but use session.begin()
         staging_tables_sql = """
         IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'Staging')
         BEGIN
@@ -167,12 +157,9 @@ def create_staging_tables(engine):
             )
         END
         """
-        
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             conn.execute(text(staging_tables_sql))
-            conn.commit()
             logging.info("Staging tables created successfully")
-            
     except Exception as e:
         logging.error(f"Error creating staging tables: {str(e)}")
         raise
@@ -186,9 +173,9 @@ def read_from_products_step1(engine):
         pandas.DataFrame: Data from ProductsStep1 table
     """
     try:
-        query = text("SELECT * FROM ProductsStep1")
-        with engine.connect() as conn:
-            df = pd.read_sql(query, conn)
+        # If you have a model for ProductsStep1, use ORM; otherwise, keep as is but use session
+        with Session(engine) as session:
+            df = pd.read_sql("SELECT * FROM ProductsStep1", session.bind)
             logging.info(f"Read {len(df)} rows from ProductsStep1 table")
             return df
     except Exception as e:
@@ -207,36 +194,21 @@ def get_or_create_unit_of_measure(engine, unit_acronym):
     Returns:
         int: UnitOfMeasureId
     """
+    from models.unit_of_measure import UnitOfMeasure
     try:
         if not unit_acronym:
             return None
-            
         unit_acronym = unit_acronym.lower().strip()
-        
-        with engine.connect() as conn:
-            # Check if unit exists
-            query = text("SELECT Id FROM UnitOfMeasure WHERE LOWER(Acronym) = :acronym")
-            result = conn.execute(query, {"acronym": unit_acronym}).fetchone()
-            
-            if result:
-                return result[0]
-            
+        with Session(engine) as session:
+            unit = session.query(UnitOfMeasure).filter(UnitOfMeasure.Acronym.ilike(unit_acronym)).first()
+            if unit:
+                return unit.Id
             # Create new unit of measure
-            insert_query = text("""
-                INSERT INTO UnitOfMeasure (Acronym, Name)
-                OUTPUT INSERTED.Id
-                VALUES (:acronym, :name)
-            """)
-            result = conn.execute(insert_query, {
-                "acronym": unit_acronym,
-                "name": unit_acronym.upper()
-            })
-            unit_id = result.fetchone()[0]
-            conn.commit()
-            
-            logging.info(f"Created new UnitOfMeasure: {unit_acronym} with ID {unit_id}")
-            return unit_id
-            
+            new_unit = UnitOfMeasure(Acronym=unit_acronym, Name=unit_acronym.upper())
+            session.add(new_unit)
+            session.commit()
+            logging.info(f"Created new UnitOfMeasure: {unit_acronym} with ID {new_unit.Id}")
+            return new_unit.Id
     except Exception as e:
         logging.error(f"Error getting/creating unit of measure: {str(e)}")
         raise
@@ -256,75 +228,44 @@ def normalize_to_staging_tables(engine, batch_guid):
     try:
         # Read data from ProductsStep1
         df = read_from_products_step1(engine)
-        
         if df.empty:
             logging.info("No data found in ProductsStep1 table")
             return {"providers": 0, "products": 0, "provider_products": 0}
-        
-        # Normalize providers
         providers_inserted = 0
         products_inserted = 0
         provider_products_inserted = 0
-        
-        with engine.connect() as conn:
-            # Get unique providers and insert into staging
+        # Use session for inserts
+        with engine.begin() as conn:
+            # Providers
             unique_providers = df['CleanProviderName'].dropna().unique()
-            
             for provider_name in unique_providers:
-                insert_provider_query = text("""
-                    INSERT INTO Staging.Provider (Name, BatchGuid)
-                    VALUES (:name, :batch_guid)
-                """)
-                conn.execute(insert_provider_query, {
-                    "name": provider_name,
-                    "batch_guid": batch_guid
-                })
+                conn.execute(text("INSERT INTO Staging.Provider (Name, BatchGuid) VALUES (:name, :batch_guid)"), {"name": provider_name, "batch_guid": batch_guid})
                 providers_inserted += 1
-            
-            # Process each row for products and provider_products
+            # Products and Provider_Product
             for _, row in df.iterrows():
-                # Get unit of measure ID
                 unit_id = get_or_create_unit_of_measure(engine, row.get('UnitOfMeasure'))
-                
-                # Insert into staging product table using RawDescription for Description
-                insert_product_query = text("""
-                    INSERT INTO Staging.Product (ProductName, Description, Price, Measure, UnitOfMeasureId, BatchGuid)
-                    VALUES (:product_name, :description, :price, :measure, :unit_id, :batch_guid)
-                """)
-                conn.execute(insert_product_query, {
+                conn.execute(text("INSERT INTO Staging.Product (ProductName, Description, Price, Measure, UnitOfMeasureId, BatchGuid) VALUES (:product_name, :description, :price, :measure, :unit_id, :batch_guid)"), {
                     "product_name": row.get('CleanDescription', ''),
-                    "description": row.get('RawDescription', ''),  # Use RawDescription for Description field
+                    "description": row.get('RawDescription', ''),
                     "price": row.get('CleanPrice'),
                     "measure": row.get('Measure'),
                     "unit_id": unit_id,
                     "batch_guid": batch_guid
                 })
                 products_inserted += 1
-                
-                # Insert into staging provider_product table
-                # We'll use a placeholder for ProductId and ProviderId since they'll be resolved during merge
-                insert_provider_product_query = text("""
-                    INSERT INTO Staging.Provider_Product (ProductId, ProviderId, LastReviewDt, PackageUnits, IVA, BatchGuid)
-                    VALUES (0, 0, :last_review_dt, :package_units, :iva, :batch_guid)
-                """)
-                conn.execute(insert_provider_product_query, {
+                conn.execute(text("INSERT INTO Staging.Provider_Product (ProductId, ProviderId, LastReviewDt, PackageUnits, IVA, BatchGuid) VALUES (0, 0, :last_review_dt, :package_units, :iva, :batch_guid)"), {
                     "last_review_dt": row.get('CleanLastReviewDt'),
                     "package_units": row.get('PackageUnits'),
                     "iva": row.get('PercentageIVA'),
                     "batch_guid": batch_guid
                 })
                 provider_products_inserted += 1
-            
-            conn.commit()
-            
         logging.info(f"Normalized data to staging tables - Providers: {providers_inserted}, Products: {products_inserted}, Provider_Products: {provider_products_inserted}")
-        
         return {
             "providers": providers_inserted,
-            "products": products_inserted, 
+            "products": products_inserted,
             "provider_products": provider_products_inserted
         }
-        
     except Exception as e:
         logging.error(f"Error normalizing to staging tables: {str(e)}")
         raise
@@ -339,8 +280,8 @@ def merge_staging_to_fact_tables(engine, batch_guid):
         batch_guid (str): Batch GUID to identify records to merge
     """
     try:
-        with engine.connect() as conn:
-            # Merge Providers
+        # DML/merge is not supported by ORM, so we keep raw SQL but use engine.begin()
+        with engine.begin() as conn:
             merge_providers_sql = text("""
                 MERGE Provider AS target
                 USING (SELECT DISTINCT Name FROM Staging.Provider WHERE BatchGuid = :batch_guid) AS source
@@ -350,8 +291,6 @@ def merge_staging_to_fact_tables(engine, batch_guid):
                     VALUES (source.Name, GETDATE());
             """)
             conn.execute(merge_providers_sql, {"batch_guid": batch_guid})
-            
-            # Merge Products
             merge_products_sql = text("""
                 MERGE Product AS target
                 USING (
@@ -372,8 +311,6 @@ def merge_staging_to_fact_tables(engine, batch_guid):
                     VALUES (source.ProductName, source.Description, source.Price, source.Measure, source.UnitOfMeasureId, GETDATE(), GETDATE());
             """)
             conn.execute(merge_products_sql, {"batch_guid": batch_guid})
-            
-            # Merge Provider_Product (more complex due to foreign keys)
             merge_provider_product_sql = text("""
                 MERGE Provider_Product AS target
                 USING (
@@ -403,10 +340,7 @@ def merge_staging_to_fact_tables(engine, batch_guid):
                     VALUES (source.ProductId, source.ProviderId, source.LastReviewDt, source.PackageUnits, source.IVA, source.IsValidated);
             """)
             conn.execute(merge_provider_product_sql, {"batch_guid": batch_guid})
-            
-            conn.commit()
             logging.info(f"Successfully merged staging data to fact tables for batch {batch_guid}")
-            
     except Exception as e:
         logging.error(f"Error merging staging to fact tables: {str(e)}")
         raise
@@ -523,10 +457,6 @@ def process_from_products_step1(server_name, database_name):
         if result is None:
             raise ValueError("Failed to establish connection to SQL Database")
         
-        # Create staging tables
-        logging.info("Creating staging tables...")
-        create_staging_tables(engine)
-        
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
         logging.info(f"Generated batch GUID: {batch_guid}")
@@ -626,10 +556,6 @@ def process_csv_from_stream(csv_data, blob_name, server_name, database_name, tab
         
         logging.info("Writing to SQL database...")
         rows_written = write_to_sql_database(transformed_df, server_name, database_name, table_name)
-        
-        # Now process the normalization pipeline
-        logging.info("Creating staging tables...")
-        create_staging_tables(engine)
         
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
