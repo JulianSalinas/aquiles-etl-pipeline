@@ -104,11 +104,10 @@ class TestETLPipeline:
     
     @patch('core.etl_orchestrator.create_azure_sql_engine')
     @patch('core.etl_orchestrator.ensure_connection_established')
-    @patch('core.etl_orchestrator.create_staging_tables')
     @patch('core.etl_orchestrator.normalize_to_staging_tables')
     @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
     def test_process_from_products_step1_success(self, mock_merge, mock_normalize, 
-                                                mock_create_staging, mock_ensure_conn, 
+                                                mock_ensure_conn, 
                                                 mock_create_engine):
         """Test successful processing from ProductsStep1."""
         mock_ensure_conn.return_value = True
@@ -145,7 +144,6 @@ class TestDataValidation:
         # Mock the functions to avoid actual database calls
         with patch('core.etl_orchestrator.create_azure_sql_engine'), \
              patch('core.etl_orchestrator.ensure_connection_established', return_value=True), \
-             patch('core.etl_orchestrator.create_staging_tables'), \
              patch('core.etl_orchestrator.normalize_to_staging_tables', 
                    return_value={"providers": 1, "products": 1, "provider_products": 1}), \
              patch('core.etl_orchestrator.merge_staging_to_fact_tables'):
@@ -212,10 +210,9 @@ class TestDataValidation:
     @patch('core.etl_orchestrator.apply_transformations')
     @patch('core.etl_orchestrator.create_azure_sql_engine')
     @patch('core.etl_orchestrator.ensure_connection_established')
-    @patch('core.etl_orchestrator.create_staging_tables')
     @patch('core.etl_orchestrator.normalize_to_staging_tables_from_dataframe')
     @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
-    def test_process_invoice_image_direct(self, mock_merge, mock_normalize, mock_create_staging,
+    def test_process_invoice_image_direct(self, mock_merge, mock_normalize,
                                         mock_ensure_conn, mock_create_engine, mock_apply_transforms,
                                         mock_extract):
         """Test direct invoice processing without CSV intermediate storage."""
@@ -243,6 +240,5 @@ class TestDataValidation:
         # Verify all steps were called
         mock_extract.assert_called_once()
         mock_apply_transforms.assert_called_once()
-        mock_create_staging.assert_called_once()
         mock_normalize.assert_called_once()
         mock_merge.assert_called_once()

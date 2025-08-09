@@ -7,10 +7,13 @@ import io
 import csv
 import uuid
 import os
+import base64
+import requests
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from models.process_file import ProcessFile
+from models.unit_of_measure import UnitOfMeasure
 from .data_processor import apply_transformations
 from .database import create_azure_sql_engine, ensure_connection_established
 from .storage import read_blob_content, get_blob_service_client, upload_blob_content
@@ -105,66 +108,6 @@ def update_process_file_status(engine, process_file_id, status_id):
         raise
 
 
-def create_staging_tables(engine):
-    """
-    Create staging tables if they don't exist.
-    """
-    try:
-        # DDL is not supported by ORM, so we keep raw SQL but use session.begin()
-        staging_tables_sql = """
-        IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'Staging')
-        BEGIN
-            EXEC('CREATE SCHEMA Staging')
-        END
-        
-        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[Staging].[Provider]') AND type in (N'U'))
-        BEGIN
-            CREATE TABLE [Staging].[Provider] (
-                [Id] int IDENTITY(1,1) PRIMARY KEY,
-                [Name] nvarchar(255) NOT NULL,
-                [BatchGuid] uniqueidentifier NOT NULL,
-                [CreateDt] datetime2 DEFAULT GETDATE()
-            )
-        END
-        
-        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[Staging].[Product]') AND type in (N'U'))
-        BEGIN
-            CREATE TABLE [Staging].[Product] (
-                [Id] int IDENTITY(1,1) PRIMARY KEY,
-                [ProductName] nvarchar(255) NOT NULL,
-                [Description] nvarchar(max),
-                [Price] decimal(18,2),
-                [Quantity] int,
-                [Measure] decimal(18,2),
-                [UnitOfMeasureId] int,
-                [BatchGuid] uniqueidentifier NOT NULL,
-                [CreatedDt] datetime2 DEFAULT GETDATE(),
-                [UpdatedDt] datetime2 DEFAULT GETDATE()
-            )
-        END
-        
-        IF NOT EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[Staging].[Provider_Product]') AND type in (N'U'))
-        BEGIN
-            CREATE TABLE [Staging].[Provider_Product] (
-                [Id] int IDENTITY(1,1) PRIMARY KEY,
-                [ProductId] int NOT NULL,
-                [ProviderId] int NOT NULL,
-                [LastReviewDt] datetime2,
-                [PackageUnits] int,
-                [IVA] decimal(18,2),
-                [IsValidated] bit DEFAULT 0,
-                [BatchGuid] uniqueidentifier NOT NULL
-            )
-        END
-        """
-        with engine.begin() as conn:
-            conn.execute(text(staging_tables_sql))
-            logging.info("Staging tables created successfully")
-    except Exception as e:
-        logging.error(f"Error creating staging tables: {str(e)}")
-        raise
-
-
 def read_from_products_step1(engine):
     """
     Read data from ProductsStep1 table for normalization.
@@ -194,7 +137,6 @@ def get_or_create_unit_of_measure(engine, unit_acronym):
     Returns:
         int: UnitOfMeasureId
     """
-    from models.unit_of_measure import UnitOfMeasure
     try:
         if not unit_acronym:
             return None
@@ -406,85 +348,89 @@ def extract_invoice_data_with_openai(image_content, image_name):
         image_name: Name of the image file
     
     Returns:
-        list: List of product dictionaries extracted from the invoice
+        pandas.DataFrame: DataFrame with extracted product data
+    
+    Raises:
+        ValueError: If OpenAI configuration is missing or extraction fails
     """
-    try:
-        import base64
-        import requests
-        
-        # Get OpenAI configuration from environment variables
-        openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
-        openai_key = os.environ.get('AZURE_OPENAI_KEY')
-        openai_model = os.environ.get('AZURE_OPENAI_MODEL', 'gpt-4-vision-preview')
-        
-        if not openai_endpoint or not openai_key:
-            logging.warning("Azure OpenAI configuration not found, falling back to mock extraction")
-            return extract_invoice_data_from_image(image_content, image_name)
-        
-        logging.info(f"Processing invoice image with Azure OpenAI: {image_name}")
-        
-        # Encode image to base64
-        encoded_image = base64.b64encode(image_content).decode('utf-8')
-        
-        # Prepare the API request
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": openai_key
-        }
-        
-        payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """Analyze this invoice image and extract product information. 
-                            Return a JSON array of products with the following structure:
-                            [{"Producto": "product name", "Provedor": "provider name", "Precio": "price", "Porcentaje de IVA": "iva percentage"}]
-                            Only return the JSON array, no additional text."""
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{encoded_image}"
-                            }
+    # Get OpenAI configuration from environment variables
+    openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
+    openai_key = os.environ.get('AZURE_OPENAI_KEY')
+    openai_model = os.environ.get('AZURE_OPENAI_MODEL', 'gpt-4-vision-preview')
+    
+    if not openai_endpoint or not openai_key:
+        raise ValueError("Azure OpenAI configuration not found. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables.")
+    
+    logging.info(f"Processing invoice image with Azure OpenAI: {image_name}")
+    
+    # Encode image to base64
+    encoded_image = base64.b64encode(image_content).decode('utf-8')
+    
+    # Prepare the API request
+    headers = {
+        "Content-Type": "application/json",
+        "api-key": openai_key
+    }
+    
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": """Extract product information from this invoice. Return CSV format with columns:
+                        Producto,Provedor,Precio,Porcentaje de IVA
+                        
+                        Include header row. Example:
+                        Producto,Provedor,Precio,Porcentaje de IVA
+                        Product Name,Provider Name,100.00,19
+                        
+                        Return only CSV data."""
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{encoded_image}"
                         }
-                    ]
-                }
-            ],
-            "max_tokens": 1000,
-            "temperature": 0.1
-        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 800,
+        "temperature": 0.1
+    }
+    
+    # Make API request
+    response = requests.post(
+        f"{openai_endpoint}/openai/deployments/{openai_model}/chat/completions?api-version=2024-02-15-preview",
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+    
+    if response.status_code != 200:
+        raise ValueError(f"OpenAI API request failed with status {response.status_code}: {response.text}")
+    
+    result = response.json()
+    content = result['choices'][0]['message']['content']
+    
+    # Parse CSV response
+    try:
+        # Clean the response to remove any markdown formatting
+        csv_content = content.strip()
+        if '```' in csv_content:
+            # Remove markdown code blocks if present
+            csv_content = csv_content.split('```')[1].strip()
+            if csv_content.startswith('csv'):
+                csv_content = csv_content[3:].strip()
         
-        # Make API request
-        response = requests.post(
-            f"{openai_endpoint}/openai/deployments/{openai_model}/chat/completions?api-version=2024-02-15-preview",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            content = result['choices'][0]['message']['content']
-            
-            # Parse JSON response
-            import json
-            try:
-                products_data = json.loads(content)
-                logging.info(f"Extracted {len(products_data)} products from invoice {image_name} using Azure OpenAI")
-                return products_data
-            except json.JSONDecodeError:
-                logging.warning(f"Failed to parse OpenAI response as JSON, falling back to mock extraction")
-                return extract_invoice_data_from_image(image_content, image_name)
-        else:
-            logging.warning(f"OpenAI API request failed with status {response.status_code}, falling back to mock extraction")
-            return extract_invoice_data_from_image(image_content, image_name)
-            
-    except Exception as e:
-        logging.warning(f"Error with OpenAI extraction: {str(e)}, falling back to mock extraction")
-        return extract_invoice_data_from_image(image_content, image_name)
+        # Parse CSV into DataFrame
+        df = pd.read_csv(io.StringIO(csv_content))
+        logging.info(f"Extracted {len(df)} products from invoice {image_name} using Azure OpenAI")
+        return df
+    except Exception as parse_error:
+        raise ValueError(f"Failed to parse OpenAI response as CSV: {str(parse_error)}. Response: {content[:200]}...")
 
 
 def process_from_products_step1(server_name, database_name):
@@ -507,9 +453,6 @@ def process_from_products_step1(server_name, database_name):
         result = ensure_connection_established(engine)
         if result is None:
             raise ValueError("Failed to establish connection to SQL Database")
-        
-        # Create staging tables if they don't exist
-        create_staging_tables(engine)
         
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
@@ -611,9 +554,6 @@ def process_csv_from_stream(csv_data, blob_name, server_name, database_name, tab
         
         # OPTIMIZATION: Skip writing to ProductsStep1 table, process directly in-memory
         logging.info("Processing data directly to staging tables (skipping ProductsStep1)...")
-        
-        # Create staging tables if they don't exist
-        create_staging_tables(engine)
         
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
@@ -852,30 +792,14 @@ def process_invoice_image_direct(image_content, image_name, server_name, databas
     try:
         logging.info(f"Starting direct invoice processing for image: {image_name}")
         
-        # Extract data from invoice image using OpenAI
+        # Extract data from invoice image using OpenAI (returns DataFrame)
         logging.info("Extracting data from invoice image...")
-        products_data = extract_invoice_data_with_openai(image_content, image_name)
-        
-        # Generate timestamp for the processing
-        trigger_date = datetime.now().strftime("%Y-%m-%d")
-        
-        # Convert invoice data to DataFrame (same structure as CSV)
-        logging.info("Converting invoice data to DataFrame...")
-        invoice_df = pd.DataFrame([
-            {
-                "Producto": product.get("Producto", ""),
-                "Fecha 1": trigger_date,
-                "Provedor": product.get("Provedor", ""), 
-                "Precio": product.get("Precio", ""),
-                "Porcentaje de IVA": product.get("Porcentaje de IVA", "")
-            }
-            for product in products_data
-        ])
+        invoice_df = extract_invoice_data_with_openai(image_content, image_name)
         
         if invoice_df.empty:
             raise ValueError("No products extracted from invoice")
         
-        logging.info(f"Created DataFrame with {len(invoice_df)} rows and {len(invoice_df.columns)} columns")
+        logging.info(f"Extracted DataFrame with {len(invoice_df)} rows and {len(invoice_df.columns)} columns")
         logging.info(f"Columns: {list(invoice_df.columns)}")
         
         # Apply same transformations as CSV processing (ensuring data convergence)
@@ -887,9 +811,6 @@ def process_invoice_image_direct(image_content, image_name, server_name, databas
         result = ensure_connection_established(engine)
         if result is None:
             raise ValueError("Failed to establish connection to SQL Database")
-        
-        # Create staging tables if they don't exist
-        create_staging_tables(engine)
         
         # Generate batch GUID for this processing batch
         batch_guid = str(uuid.uuid4())
@@ -908,7 +829,7 @@ def process_invoice_image_direct(image_content, image_name, server_name, databas
         return {
             "status": True,
             "message": f"Direct invoice processing completed successfully for: {image_name}",
-            "products_extracted": len(products_data),
+            "products_extracted": len(invoice_df),
             "rows_processed": len(transformed_df),
             "batch_guid": batch_guid,
             "staging_summary": staging_summary

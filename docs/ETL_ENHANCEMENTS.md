@@ -39,7 +39,6 @@ Implemented MERGE statements for:
 - `check_process_file_status()`: Check if file is already processed
 - `insert_process_file_record()`: Track new files with Status 2
 - `update_process_file_status()`: Update file status (e.g., to Status 3 on success)
-- `create_staging_tables()`: Create staging schema and tables
 - `normalize_to_staging_tables()`: Transform ProductsStep1 data to staging tables
 - `merge_staging_to_fact_tables()`: Merge staging data to fact tables
 - `extract_invoice_data_with_openai()`: Extract products from images using Azure OpenAI

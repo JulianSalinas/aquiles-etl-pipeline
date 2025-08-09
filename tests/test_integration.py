@@ -16,10 +16,9 @@ class TestETLIntegration:
     @patch('core.etl_orchestrator.check_process_file_status')
     @patch('core.etl_orchestrator.insert_process_file_record')
     @patch('core.etl_orchestrator.update_process_file_status')
-    @patch('core.etl_orchestrator.create_staging_tables')
     @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
     def test_complete_csv_processing_flow(self, mock_merge,
-                                        mock_create_staging, mock_update_status, mock_insert_file,
+                                        mock_update_status, mock_insert_file,
                                         mock_check_file, mock_ensure_conn, mock_create_engine):
         """Test the complete CSV processing flow from start to finish."""
         
@@ -55,7 +54,6 @@ Aceite Vegetal 500ml,2024-01-15,Comercial Martinez,4200.00,19
         # Verify all pipeline steps were called
         mock_check_file.assert_called_once()
         mock_insert_file.assert_called_once()
-        mock_create_staging.assert_called_once()
         mock_merge.assert_called_once()
         mock_update_status.assert_called_with(mock_create_engine.return_value, 123, 3)  # Status 3 = Success
     
@@ -91,11 +89,10 @@ Test Product,2024-01-15,Test Provider,1000.00
     
     @patch('core.etl_orchestrator.create_azure_sql_engine')
     @patch('core.etl_orchestrator.ensure_connection_established')
-    @patch('core.etl_orchestrator.create_staging_tables')
     @patch('core.etl_orchestrator.normalize_to_staging_tables')
     @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
     def test_process_from_products_step1_with_data(self, mock_merge, mock_normalize, 
-                                                 mock_create_staging, mock_ensure_conn, 
+                                                 mock_ensure_conn, 
                                                  mock_create_engine):
         """Test processing existing data from ProductsStep1 table."""
         
@@ -117,7 +114,6 @@ Test Product,2024-01-15,Test Provider,1000.00
         assert result["staging_summary"]["provider_products"] == 3
         
         # Verify all steps were called
-        mock_create_staging.assert_called_once()
         mock_normalize.assert_called_once()
         mock_merge.assert_called_once()
     

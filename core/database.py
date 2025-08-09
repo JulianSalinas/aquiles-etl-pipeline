@@ -4,6 +4,8 @@ Merged from sql_utils.py for consolidated database functionality.
 """
 import urllib
 import struct
+import time
+import logging
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base
 from azure.identity import DefaultAzureCredential
@@ -50,9 +52,6 @@ def ensure_connection_established(engine, max_retries=3):
     Returns:
         Query result if successful, None if all retries failed
     """
-    import time
-    import logging
-    
     for attempt in range(max_retries):
         try:
             with engine.connect() as conn:

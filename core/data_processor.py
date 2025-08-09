@@ -6,6 +6,7 @@ import pandas as pd
 from dateutil.parser import parse
 from decimal import *
 import re
+from datetime import datetime
 
 # Regex to find the measure and unit in the string
 measure_regex = r"(\d+\.?\d*)\s*([a-zA-Z]{1,3})"
@@ -149,6 +150,10 @@ def apply_transformations(df):
         for old_col, new_col in column_mapping.items():
             if old_col in df.columns:
                 df = df.rename(columns={old_col: new_col})
+        
+        # Add current date if LastReviewDt column is missing
+        if 'LastReviewDt' not in df.columns:
+            df['LastReviewDt'] = datetime.now().strftime("%Y-%m-%d")
         
         # Apply price transformations
         if 'Price' in df.columns:
