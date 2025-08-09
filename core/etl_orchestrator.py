@@ -12,8 +12,7 @@ import requests
 from datetime import datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from models.process_file import ProcessFile
-from models.unit_of_measure import UnitOfMeasure
+from core.entities import ProcessFile, UnitOfMeasure
 from .data_processor import apply_transformations
 from .database import create_azure_sql_engine, ensure_connection_established
 from .storage import read_blob_content, get_blob_service_client, upload_blob_content
@@ -550,6 +549,7 @@ def process_csv_from_stream(csv_data, blob_name, server_name, database_name, tab
         logging.info(f"Original columns: {list(df.columns)}")
         
         logging.info("Applying data transformations...")
+        df = map_columns_to_apply_transformations(df)
         transformed_df = apply_transformations(df)
         
         # OPTIMIZATION: Skip writing to ProductsStep1 table, process directly in-memory
@@ -804,6 +804,7 @@ def process_invoice_image_direct(image_content, image_name, server_name, databas
         
         # Apply same transformations as CSV processing (ensuring data convergence)
         logging.info("Applying data transformations...")
+        invoice_df = map_columns_to_apply_transformations(invoice_df)
         transformed_df = apply_transformations(invoice_df)
         
         # Create database engine and ensure connection

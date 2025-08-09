@@ -36,24 +36,6 @@ class FileStatus(Base):
     ProcessFile: Mapped[List['ProcessFile']] = relationship('ProcessFile', back_populates='FileStatus_')
 
 
-t_ProductsStep1 = Table(
-    'ProductsStep1', Base.metadata,
-    Column('RawPrice', Unicode(collation='SQL_Latin1_General_CP1_CI_AS')),
-    Column('CleanPrice', DECIMAL(18, 2)),
-    Column('IsValidPrice', Boolean),
-    Column('RawLastReviewDt', Unicode(collation='SQL_Latin1_General_CP1_CI_AS')),
-    Column('CleanLastReviewDt', DateTime),
-    Column('RawDescription', Unicode(collation='SQL_Latin1_General_CP1_CI_AS')),
-    Column('CleanDescription', Unicode(collation='SQL_Latin1_General_CP1_CI_AS')),
-    Column('Measure', Unicode(50, 'SQL_Latin1_General_CP1_CI_AS')),
-    Column('UnitOfMeasure', Unicode(50, 'SQL_Latin1_General_CP1_CI_AS')),
-    Column('PackageUnits', Integer),
-    Column('RawProviderName', Unicode(255, 'SQL_Latin1_General_CP1_CI_AS')),
-    Column('CleanProviderName', Unicode(255, 'SQL_Latin1_General_CP1_CI_AS')),
-    Column('PercentageIVA', DECIMAL(18, 2))
-)
-
-
 class Provider(Base):
     __tablename__ = 'Provider'
     __table_args__ = (
