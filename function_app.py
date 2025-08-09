@@ -1,7 +1,7 @@
 import os
 import logging
 import azure.functions as func
-from core.etl_orchestrator import process_csv_from_blob, process_csv_from_stream, process_invoice_image
+from core.etl_orchestrator import process_csv_from_blob, process_csv_from_stream, process_invoice_image, process_invoice_image_direct
 
 app = func.FunctionApp()
 
@@ -71,19 +71,21 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
 def invoice_processor_blob_trigger(invoice_blob: func.InputStream):
     """
     Azure Function triggered by blob upload to process invoice images.
-    Extracts product data from invoice images and generates CSV files.
+    Uses optimized direct processing that bypasses CSV generation and storage.
     """
     try:
         logging.info(f"INVOICE TRIGGER - Processing invoice image: {invoice_blob.name}")
 
-        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')
+        server_name = os.environ.get('SQL_SERVER')
+        database_name = os.environ.get('SQL_DATABASE')
         
         image_content = invoice_blob.read()
         
-        result = process_invoice_image(image_content, invoice_blob.name, storage_account_name, "products-dev")
+        # Use direct processing for better performance (skips CSV intermediate storage)
+        result = process_invoice_image_direct(image_content, invoice_blob.name, server_name, database_name)
 
         if result["status"] == True:
-            success_msg = f"Invoice processing completed successfully for: {invoice_blob.name}"
+            success_msg = f"Invoice processing completed successfully for: {invoice_blob.name}. Products: {result.get('products_extracted', 'N/A')}"
             logging.info(success_msg)
         else:
             error_msg = f"Invoice processing failed for: {invoice_blob.name} - {result['message']}"

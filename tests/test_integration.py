@@ -17,10 +17,8 @@ class TestETLIntegration:
     @patch('core.etl_orchestrator.insert_process_file_record')
     @patch('core.etl_orchestrator.update_process_file_status')
     @patch('core.etl_orchestrator.create_staging_tables')
-    @patch('core.etl_orchestrator.normalize_to_staging_tables')
     @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
-    @patch('core.etl_orchestrator.write_to_sql_database')
-    def test_complete_csv_processing_flow(self, mock_write_sql, mock_merge, mock_normalize, 
+    def test_complete_csv_processing_flow(self, mock_merge,
                                         mock_create_staging, mock_update_status, mock_insert_file,
                                         mock_check_file, mock_ensure_conn, mock_create_engine):
         """Test the complete CSV processing flow from start to finish."""
@@ -29,13 +27,11 @@ class TestETLIntegration:
         mock_ensure_conn.return_value = True
         mock_check_file.return_value = {"exists": False, "status_id": None, "id": None}
         mock_insert_file.return_value = 123  # ProcessFile ID
-        mock_write_sql.return_value = 5  # 5 rows written
-        mock_normalize.return_value = {"providers": 2, "products": 5, "provider_products": 5}
         
         # Create test CSV data
         csv_data = """Producto,Fecha 1,Provedor,Precio,Porcentaje de IVA
 Arroz Premium 1kg,2024-01-15,Distribuidora San Juan,2500.00,19
-Aceite Vegetal 500ml,2024-01-15,Distribuidora San Juan,4200.00,19
+Aceite Vegetal 500ml,2024-01-15,Comercial Martinez,4200.00,19
 """.encode('utf-8')
         
         # Execute the full pipeline
@@ -51,16 +47,15 @@ Aceite Vegetal 500ml,2024-01-15,Distribuidora San Juan,4200.00,19
         assert result["status"] is True
         assert "ETL process completed successfully" in result["message"]
         assert result["rows_processed"] == 2
-        assert result["rows_written"] == 5
+        assert result["rows_written"] == 6  # 2 providers + 2 products + 2 provider_products
         assert "batch_guid" in result
         assert result["staging_summary"]["providers"] == 2
-        assert result["staging_summary"]["products"] == 5
+        assert result["staging_summary"]["products"] == 2
         
         # Verify all pipeline steps were called
         mock_check_file.assert_called_once()
         mock_insert_file.assert_called_once()
         mock_create_staging.assert_called_once()
-        mock_normalize.assert_called_once()
         mock_merge.assert_called_once()
         mock_update_status.assert_called_with(mock_create_engine.return_value, 123, 3)  # Status 3 = Success
     

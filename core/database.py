@@ -35,9 +35,39 @@ def create_azure_sql_engine(server_name, database_name):
     Base.metadata.create_all(engine)
     return engine
 
-def ensure_connection_established(engine):
-    """Test SQL connection with a simple query."""
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT 1 as test_value")).fetchone()
-        return result
+def ensure_connection_established(engine, max_retries=3):
+    """
+    Test SQL connection with a simple query and awaken database if needed.
+    
+    The database has a feature to turn off itself. When the database is turned-off 
+    it needs to be awaken to work. Therefore, make a dummy request to the database 
+    and expect for it to fail the first time, then try again until the database is awaken.
+    
+    Args:
+        engine: SQLAlchemy engine
+        max_retries: Maximum number of retry attempts
+        
+    Returns:
+        Query result if successful, None if all retries failed
+    """
+    import time
+    import logging
+    
+    for attempt in range(max_retries):
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text("SELECT 1 as test_value")).fetchone()
+                if attempt > 0:
+                    logging.info(f"Database connection established after {attempt + 1} attempts")
+                return result
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt  # Exponential backoff: 1, 2, 4 seconds
+                logging.warning(f"Database connection attempt {attempt + 1} failed: {str(e)}. Retrying in {wait_time} seconds...")
+                time.sleep(wait_time)
+            else:
+                logging.error(f"Database connection failed after {max_retries} attempts: {str(e)}")
+                raise
+    
+    return None
     

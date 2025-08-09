@@ -141,7 +141,8 @@ def apply_transformations(df):
             'Fecha 1': 'LastReviewDt', 
             'Provedor': 'ProviderName',
             'Precio': 'Price',
-            "IVA": "PercentageIVA"
+            "IVA": "PercentageIVA",
+            "Porcentaje de IVA": "PercentageIVA"
         }
         
         # Rename columns if they exist
@@ -173,7 +174,8 @@ def apply_transformations(df):
             df['UnitOfMeasure'] = measure_unit_data.apply(lambda x: x[1].lower() if x and x[1] else None)
             df['PackageUnits'] = measure_unit_data.apply(lambda x: x[2] if x else None)
             
-            if 'PercentageIVA' in df.columns:
+            # Extract IVA percentage if not already present
+            if 'PercentageIVA' not in df.columns:
                 df['PercentageIVA'] = df['Description'].apply(lambda x: extract_iva(str(x)) if pd.notna(x) else None)
                 
         # Apply provider name transformations
