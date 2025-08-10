@@ -5,7 +5,7 @@ These tests mock the database connections but test the full flow.
 import pytest
 import pandas as pd
 from unittest.mock import Mock, patch, MagicMock
-from core.etl_orchestrator import process_csv_from_stream, process_from_products_step1
+from core.etl_orchestrator import process_csv_from_stream
 
 
 class TestETLIntegration:
@@ -86,36 +86,6 @@ Test Product,2024-01-15,Test Provider,1000.00
         assert "already processed successfully" in result["message"]
         assert result["rows_processed"] == 0
         assert result["rows_written"] == 0
-    
-    @patch('core.etl_orchestrator.create_azure_sql_engine')
-    @patch('core.etl_orchestrator.ensure_connection_established')
-    @patch('core.etl_orchestrator.normalize_to_staging_tables')
-    @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
-    def test_process_from_products_step1_with_data(self, mock_merge, mock_normalize, 
-                                                 mock_ensure_conn, 
-                                                 mock_create_engine):
-        """Test processing existing data from ProductsStep1 table."""
-        
-        # Setup mocks
-        mock_ensure_conn.return_value = True
-        
-        # Mock normalization results directly since we're not testing read_from_products_step1
-        mock_normalize.return_value = {"providers": 2, "products": 3, "provider_products": 3}
-        
-        # Execute the processing
-        result = process_from_products_step1("test-server", "test-db")
-        
-        # Verify the result
-        assert result["status"] is True
-        assert "completed successfully" in result["message"]
-        assert "batch_guid" in result
-        assert result["staging_summary"]["providers"] == 2
-        assert result["staging_summary"]["products"] == 3
-        assert result["staging_summary"]["provider_products"] == 3
-        
-        # Verify all steps were called
-        mock_normalize.assert_called_once()
-        mock_merge.assert_called_once()
     
     @patch('core.etl_orchestrator.create_azure_sql_engine')
     @patch('core.etl_orchestrator.ensure_connection_established')

@@ -2,6 +2,7 @@ import sys
 import os
 import pytest
 import io
+import pandas as pd
 from datetime import datetime
 from unittest.mock import Mock, patch
 
@@ -9,8 +10,7 @@ from unittest.mock import Mock, patch
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.etl_orchestrator import (
-    extract_invoice_data_from_image,
-    generate_csv_from_invoice_data,
+    extract_invoice_data_with_openai,
     process_invoice_image
 )
 
@@ -23,178 +23,156 @@ pytestmark = pytest.mark.invoice
 class TestInvoiceDataExtraction:
     """Tests for invoice data extraction functions."""
     
-    def test_extract_invoice_data_from_image_factura_filename(self):
-        """Test extracting data from image with 'factura' in filename."""
+    @patch('core.etl_orchestrator.AzureOpenAI')
+    def test_extract_invoice_data_with_openai_success(self, mock_openai_client):
+        """Test extracting data from image with successful OpenAI response."""
+        # Mock the OpenAI client and response
+        mock_client = Mock()
+        mock_openai_client.return_value = mock_client
+        
+        # Properly structure the mock response
+        mock_choice = Mock()
+        mock_choice.message.content = "Producto,Provedor,Precio,Porcentaje de IVA\nTest Product,Test Provider,100.00,19\nAnother Product,Another Provider,200.00,8"
+        
+        mock_response = Mock()
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        
+        # Set required environment variables
+        os.environ['AZURE_OPENAI_ENDPOINT'] = 'https://test.openai.azure.com/'
+        os.environ['AZURE_OPENAI_KEY'] = 'test-key'
+        
         image_content = b"mock_image_data"
         image_name = "factura_001.jpg"
         
-        result = extract_invoice_data_from_image(image_content, image_name)
+        result = extract_invoice_data_with_openai(image_content, image_name)
         
-        assert isinstance(result, list)
-        assert len(result) == 2  # Mock returns 2 products for factura
-        assert all("Producto" in product for product in result)
-        assert all("Provedor" in product for product in result)
-        assert all("Precio" in product for product in result)
-        assert all("Porcentaje de IVA" in product for product in result)
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 2
+        assert "Producto" in result.columns
+        assert "Provedor" in result.columns
+        assert "Precio" in result.columns
+        assert "Porcentaje de IVA" in result.columns
+        assert result.iloc[0]["Producto"] == "Test Product"
+        assert result.iloc[1]["Producto"] == "Another Product"
     
-    def test_extract_invoice_data_from_image_invoice_filename(self):
-        """Test extracting data from image with 'invoice' in filename."""
+    @patch('core.etl_orchestrator.AzureOpenAI')
+    def test_extract_invoice_data_with_openai_markdown_response(self, mock_openai_client):
+        """Test extracting data with markdown-formatted OpenAI response."""
+        # Mock the OpenAI client and response with markdown
+        mock_client = Mock()
+        mock_openai_client.return_value = mock_client
+        
+        # Properly structure the mock response
+        mock_choice = Mock()
+        mock_choice.message.content = "```csv\nProducto,Provedor,Precio,Porcentaje de IVA\nMarkdown Product,Markdown Provider,150.00,19\n```"
+        
+        mock_response = Mock()
+        mock_response.choices = [mock_choice]
+        mock_client.chat.completions.create.return_value = mock_response
+        
+        # Set required environment variables
+        os.environ['AZURE_OPENAI_ENDPOINT'] = 'https://test.openai.azure.com/'
+        os.environ['AZURE_OPENAI_KEY'] = 'test-key'
+        
         image_content = b"mock_image_data"
         image_name = "invoice_002.png"
         
-        result = extract_invoice_data_from_image(image_content, image_name)
+        result = extract_invoice_data_with_openai(image_content, image_name)
         
-        assert isinstance(result, list)
-        assert len(result) == 2  # Mock returns 2 products for invoice
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 1
+        assert result.iloc[0]["Producto"] == "Markdown Product"
     
-    def test_extract_invoice_data_from_image_generic_filename(self):
-        """Test extracting data from image with generic filename."""
+    def test_extract_invoice_data_with_openai_missing_config(self):
+        """Test error handling when OpenAI configuration is missing."""
+        # Clear environment variables
+        if 'AZURE_OPENAI_ENDPOINT' in os.environ:
+            del os.environ['AZURE_OPENAI_ENDPOINT']
+        if 'AZURE_OPENAI_KEY' in os.environ:
+            del os.environ['AZURE_OPENAI_KEY']
+        
         image_content = b"mock_image_data"
-        image_name = "document_001.jpg"
+        image_name = "test.jpg"
         
-        result = extract_invoice_data_from_image(image_content, image_name)
-        
-        assert isinstance(result, list)
-        assert len(result) == 1  # Mock returns 1 product for generic
-        assert result[0]["Producto"] == "Producto Generico"
-        assert result[0]["Provedor"] == "Proveedor Generico"
-
-
-@pytest.mark.csv
-class TestCSVGeneration:
-    """Tests for CSV generation from invoice data."""
-    
-    def test_generate_csv_from_invoice_data_single_product(self):
-        """Test CSV generation with single product."""
-        products_data = [
-            {
-                "Producto": "Test Product",
-                "Provedor": "Test Provider",
-                "Precio": "1500.00",
-                "Porcentaje de IVA": "19"
-            }
-        ]
-        trigger_date = "2024-01-15"
-        
-        result = generate_csv_from_invoice_data(products_data, trigger_date)
-        
-        assert isinstance(result, str)
-        assert "Producto,Fecha 1,Provedor,Precio,Porcentaje de IVA" in result
-        assert "Test Product" in result
-        assert "2024-01-15" in result
-        assert "Test Provider" in result
-        assert "1500.00" in result
-        assert "19" in result
-    
-    def test_generate_csv_from_invoice_data_multiple_products(self):
-        """Test CSV generation with multiple products."""
-        products_data = [
-            {
-                "Producto": "Product 1",
-                "Provedor": "Provider 1",
-                "Precio": "1000.00",
-                "Porcentaje de IVA": "19"
-            },
-            {
-                "Producto": "Product 2",
-                "Provedor": "Provider 2",
-                "Precio": "2000.00",
-                "Porcentaje de IVA": "8"
-            }
-        ]
-        trigger_date = "2024-01-15"
-        
-        result = generate_csv_from_invoice_data(products_data, trigger_date)
-        
-        # Count lines (header + 2 products)
-        lines = result.strip().split('\n')
-        assert len(lines) == 3
-        assert "Product 1" in result
-        assert "Product 2" in result
-    
-    def test_generate_csv_from_invoice_data_empty_products(self):
-        """Test CSV generation with empty products list."""
-        products_data = []
-        trigger_date = "2024-01-15"
-        
-        result = generate_csv_from_invoice_data(products_data, trigger_date)
-        
-        assert isinstance(result, str)
-        assert "Producto,Fecha 1,Provedor,Precio,Porcentaje de IVA" in result
-        # Should only have header
-        lines = result.strip().split('\n')
-        assert len(lines) == 1
+        with pytest.raises(ValueError, match="Azure OpenAI configuration not found"):
+            extract_invoice_data_with_openai(image_content, image_name)
 
 
 @pytest.mark.integration
 class TestInvoiceProcessingIntegration:
     """Integration tests for complete invoice processing pipeline."""
     
-    @patch('core.etl_orchestrator.get_blob_service_client')
-    @patch('core.etl_orchestrator.upload_blob_content')
-    def test_process_invoice_image_success(self, mock_upload, mock_get_client):
+    @patch('core.etl_orchestrator.apply_transformations')
+    @patch('core.etl_orchestrator.map_columns_to_apply_transformations')
+    @patch('core.etl_orchestrator.merge_staging_to_fact_tables')
+    @patch('core.etl_orchestrator.normalize_to_staging_tables_from_dataframe')
+    @patch('core.etl_orchestrator.ensure_connection_established')
+    @patch('core.etl_orchestrator.create_azure_sql_engine')
+    @patch('core.etl_orchestrator.extract_invoice_data_with_openai')
+    def test_process_invoice_image_success(self, mock_extract, mock_engine, mock_ensure_connection, mock_normalize, mock_merge, mock_map_columns, mock_apply_transforms):
         """Test successful invoice image processing."""
         # Setup mocks
-        mock_blob_client = Mock()
-        mock_get_client.return_value = mock_blob_client
-        mock_upload.return_value = True
+        mock_df = pd.DataFrame({
+            'Producto': ['Test Product'],
+            'Provedor': ['Test Provider'],
+            'Precio': ['100.00'],
+            'Porcentaje de IVA': ['19']
+        })
+        mock_extract.return_value = mock_df
+        mock_map_columns.return_value = mock_df
+        mock_apply_transforms.return_value = mock_df
+        
+        mock_engine_instance = Mock()
+        mock_engine.return_value = mock_engine_instance
+        mock_ensure_connection.return_value = None  # No exception means success
         
         # Test data
         image_content = b"mock_image_data"
         image_name = "factura_test.jpg"
-        storage_account_name = "teststorage"
-        output_container = "products-dev"
+        server_name = "test-server"
+        database_name = "test-db"
         
-        result = process_invoice_image(image_content, image_name, storage_account_name, output_container)
+        result = process_invoice_image(image_content, image_name, server_name, database_name)
         
         # Verify result
-        assert result["status"] is True
-        assert "products_extracted" in result
-        assert result["products_extracted"] == 2  # Mock extracts 2 products for factura
-        assert "csv_filename" in result
-        assert result["csv_filename"].startswith("factura_test_products_")
-        assert result["csv_filename"].endswith(".csv")
-        assert result["output_container"] == output_container
+        assert result.status is True
+        assert hasattr(result, 'products_extracted')
+        assert result.products_extracted == 1
+        assert "Invoice processing completed successfully" in result.message
         
         # Verify mocks were called
-        mock_get_client.assert_called_once_with(storage_account_name)
-        mock_upload.assert_called_once()
-        
-        # Verify upload was called with correct parameters
-        call_args = mock_upload.call_args
-        assert call_args[0][0] == mock_blob_client  # blob_service_client
-        assert call_args[0][1] == output_container   # container_name
-        assert call_args[0][2].startswith("factura_test_products_")  # blob_name
-        assert "Producto,Fecha 1,Provedor,Precio,Porcentaje de IVA" in call_args[0][3]  # content
+        mock_extract.assert_called_once_with(image_content, image_name)
+        mock_engine.assert_called_once_with(server_name, database_name)
+        mock_ensure_connection.assert_called_once_with(mock_engine_instance)
+        mock_normalize.assert_called_once()
+        mock_merge.assert_called_once()
     
-    @patch('core.etl_orchestrator.get_blob_service_client')
-    @patch('core.etl_orchestrator.upload_blob_content')
-    def test_process_invoice_image_upload_failure(self, mock_upload, mock_get_client):
-        """Test invoice processing when upload fails."""
-        # Setup mocks to raise exception
-        mock_blob_client = Mock()
-        mock_get_client.return_value = mock_blob_client
-        mock_upload.side_effect = Exception("Upload failed")
+    @patch('core.etl_orchestrator.extract_invoice_data_with_openai')
+    def test_process_invoice_image_extraction_failure(self, mock_extract):
+        """Test invoice processing when data extraction fails."""
+        # Setup mock to raise exception
+        mock_extract.side_effect = Exception("OpenAI extraction failed")
         
         # Test data
         image_content = b"mock_image_data"
         image_name = "test.jpg"
-        storage_account_name = "teststorage"
-        output_container = "products-dev"
+        server_name = "test-server"
+        database_name = "test-db"
         
-        result = process_invoice_image(image_content, image_name, storage_account_name, output_container)
+        result = process_invoice_image(image_content, image_name, server_name, database_name)
         
         # Verify result indicates failure
-        assert result["status"] is False
-        assert "Upload failed" in result["message"]
+        assert result.status is False
+        assert "OpenAI extraction failed" in result.message
     
     def test_process_invoice_image_invalid_input(self):
         """Test invoice processing with invalid input."""
         # Test with None image content
-        result = process_invoice_image(None, "test.jpg", "storage", "container")
+        result = process_invoice_image(None, "test.jpg", "server", "database")
         
-        assert result["status"] is False
-        assert "message" in result
+        assert result.status is False
+        assert "message" in result.__dict__
 
 
 def run_invoice_tests():
