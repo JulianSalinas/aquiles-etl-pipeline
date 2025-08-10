@@ -3,6 +3,7 @@ Azure Storage operations module for blob handling.
 """
 import logging
 from dataclasses import dataclass
+from io import StringIO
 
 from azure.core.paging import ItemPaged
 from azure.identity import DefaultAzureCredential
@@ -93,7 +94,7 @@ def list_blobs_in_container(blob_service_client: BlobServiceClient, container_na
         raise
 
 
-def upload_blob_content(blob_service_client: BlobServiceClient, container_name: str, blob_name: str, content: bytes, content_type: str = "text/csv"):
+def upload_blob_content(blob_service_client: BlobServiceClient, container_name: str, blob_name: str, content: bytes | str | StringIO, content_type: str = "text/csv"):
     """Upload content to Azure Storage as a blob."""
     try:
         blob_client: BlobClient = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
