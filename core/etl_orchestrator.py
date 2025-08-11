@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Any
 
 import pandas as pd
-import requests
+from openai import AzureOpenAI
 from azure.storage.blob import BlobServiceClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
@@ -247,12 +247,8 @@ def extract_invoice_data_with_openai(image_content: bytes, image_name: str) -> p
     openai_key = os.environ.get('AZURE_OPENAI_KEY')
     openai_model = os.environ.get('AZURE_OPENAI_MODEL', 'gpt-4-vision-preview')
     
-    if not openai_endpoint or not openai_key:
-        raise ValueError("Azure OpenAI configuration not found. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables.")
-    
-    encoded_image = base64.b64encode(image_content).decode('utf-8')
-    
-    prompt = """
+    # Get configurable parameters from environment variables
+    prompt = os.environ.get('OPENAI_PROMPT', """
         Extract product information from this invoice. Return CSV format with columns:
         Producto,Provedor,Precio,Porcentaje de IVA
         
@@ -261,70 +257,71 @@ def extract_invoice_data_with_openai(image_content: bytes, image_name: str) -> p
         Product Name,Provider Name,100.00,19
         
         Return only CSV data.
-    """
-
-    # Prepare the API request
-    headers: dict[str, str] = {
-        "Content-Type": "application/json",
-        "api-key": openai_key
-    }
-
-    payload: dict[str, Any] = {
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{encoded_image}"
-                        }
-                    }
-                ]
-            }
-        ],
-        "max_tokens": 800,
-        "temperature": 0.1
-    }
+    """)
+    max_tokens = int(os.environ.get('OPENAI_MAX_TOKENS', '800'))
+    temperature = float(os.environ.get('OPENAI_TEMPERATURE', '0.1'))
     
-    # Make API request
-    response = requests.post(
-        f"{openai_endpoint}/openai/deployments/{openai_model}/chat/completions?api-version=2024-02-15-preview",
-        headers=headers,
-        json=payload,
-        timeout=30
+    if not openai_endpoint or not openai_key:
+        raise ValueError("Azure OpenAI configuration not found. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables.")
+    
+    encoded_image = base64.b64encode(image_content).decode('utf-8')
+    
+    # Initialize Azure OpenAI client
+    client = AzureOpenAI(
+        azure_endpoint=openai_endpoint,
+        api_key=openai_key,
+        api_version="2024-02-15-preview"
     )
     
-    if response.status_code != 200:
-        raise ValueError(f"OpenAI API request failed with status {response.status_code}: {response.text}")
-    
-    result = response.json()
-
-    content = result['choices'][0]['message']['content']
-    
+    # Make API request using OpenAI library
     try:
-        # Clean the response to remove any markdown formatting
-        csv_content = content.strip()
-
-        if '```' in csv_content:
-            # Remove markdown code blocks if present
-            csv_content = csv_content.split('```')[1].strip()
-            if csv_content.startswith('csv'):
-                csv_content = csv_content[3:].strip()
+        response = client.chat.completions.create(
+            model=openai_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{encoded_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
         
-        # Parse CSV into DataFrame
-        df: pd.DataFrame = pd.read_csv(io.StringIO(csv_content)) # type: ignore
+        content = response.choices[0].message.content
+        
+        try:
+            # Clean the response to remove any markdown formatting
+            csv_content = content.strip()
 
-        logging.info(f"Extracted {len(df)} products from invoice {image_name} using Azure OpenAI")
+            if '```' in csv_content:
+                # Remove markdown code blocks if present
+                csv_content = csv_content.split('```')[1].strip()
+                if csv_content.startswith('csv'):
+                    csv_content = csv_content[3:].strip()
+            
+            # Parse CSV into DataFrame
+            df: pd.DataFrame = pd.read_csv(io.StringIO(csv_content)) # type: ignore
 
-        return df
-    
-    except Exception as parse_error:
-        raise ValueError(f"Failed to parse OpenAI response as CSV: {str(parse_error)}. Response: {content[:200]}...")
+            logging.info(f"Extracted {len(df)} products from invoice {image_name} using Azure OpenAI")
+
+            return df
+        
+        except Exception as parse_error:
+            raise ValueError(f"Failed to parse OpenAI response as CSV: {str(parse_error)}. Response: {content[:200]}...")
+            
+    except Exception as api_error:
+        raise ValueError(f"OpenAI API request failed: {str(api_error)}")
 
 
 def process_csv_from_stream(csv_data: bytes, blob_name: str, server_name: str, database_name: str) -> ProcessingResult:
@@ -407,29 +404,25 @@ def process_csv_from_blob(storage_account_name: str, container_name: str, blob_n
         return ProcessingResult(status=False, message=error_message)
 
 
-def process_invoice_image(image_content: bytes, image_name: str, storage_account_name: str, output_container: str) -> ProcessingResult:
-    """Complete invoice processing pipeline: extract data from image, generate CSV, and upload to storage."""
+def process_invoice_image(image_content: bytes, image_name: str, server_name: str, database_name: str) -> ProcessingResult:
+    """Complete invoice processing pipeline: extract data from image and write directly to database."""
     try:
         logging.info(f"Starting invoice processing for image: {image_name}")
         
         products_data: pd.DataFrame = extract_invoice_data_with_openai(image_content, image_name)
         
-        buffer = io.StringIO()
-
-        if 'Fecha 1' not in products_data.columns:
-            products_data['Fecha 1'] = datetime.now().strftime('%Y-%m-%d')
-
-        products_data.to_csv(path_or_buf=buffer, index=False)
-
-        base_name: str = image_name.rsplit(sep='.', maxsplit=1)[0]  # Remove file extension
-
-        csv_filename: str = f"{base_name}_products_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-
-        logging.info(f"Uploading CSV to {output_container} container...")
-
-        blob_service_client: BlobServiceClient = get_blob_service_client(storage_account_name)
-
-        upload_blob_content(blob_service_client, output_container, csv_filename, buffer.getvalue())
+        # Apply transformations to prepare data for database
+        df = map_columns_to_apply_transformations(products_data)
+        transformed_df: pd.DataFrame = apply_transformations(df)
+        
+        # Create database engine and process data
+        engine: Engine = create_azure_sql_engine(server_name, database_name)
+        ensure_connection_established(engine)
+        
+        batch_guid = str(uuid.uuid4())
+        
+        normalize_to_staging_tables_from_dataframe(engine, transformed_df, batch_guid)
+        merge_staging_to_fact_tables(engine, batch_guid)
         
         logging.info(f"Invoice processing completed successfully for: {image_name}")
 
@@ -437,8 +430,8 @@ def process_invoice_image(image_content: bytes, image_name: str, storage_account
             status=True,
             message=f"Invoice processing completed successfully for: {image_name}",
             products_extracted=len(products_data),
-            csv_filename=csv_filename,
-            output_container=output_container
+            csv_filename=None,
+            output_container=None
         )
         
     except Exception as e:
