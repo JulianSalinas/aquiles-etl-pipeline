@@ -104,7 +104,7 @@ class TestAzureStorageConnection:
             
             # Print first few blobs for information
             for i, blob in enumerate(blobs[:3]):
-                print(f"   - {blob['name']} ({blob['size']} bytes)")
+                print(f"   - {blob.name} ({blob.size} bytes)")
                 if i >= 2:  # Show max 3 blobs
                     break
             
@@ -138,9 +138,9 @@ class TestAzureStorageConnection:
             properties = get_blob_properties(blob_service_client, test_container, test_blob_name)
             assert properties is not None, "Should be able to get blob properties"
             print(f"✅ Blob properties retrieved:")
-            print(f"   - Size: {properties['size']} bytes")
-            print(f"   - Last modified: {properties['last_modified']}")
-            print(f"   - Content type: {properties['content_type']}")
+            print(f"   - Size: {properties.size} bytes")
+            print(f"   - Last modified: {properties.last_modified}")
+            print(f"   - Content type: {properties.content_type}")
             
         except Exception as e:
             pytest.fail(f"Failed blob upload/read test: {str(e)}")
@@ -238,9 +238,9 @@ class TestStorageIntegration:
             # Step 5: Get file metadata (simulating logging)
             properties = get_blob_properties(blob_service_client, test_container, test_blob_name)
             print(f"✅ Step 5: File metadata retrieved:")
-            print(f"   - File: {properties['name']}")
-            print(f"   - Size: {properties['size']} bytes")
-            print(f"   - Upload time: {properties['last_modified']}")
+            print(f"   - File: {properties.name}")
+            print(f"   - Size: {properties.size} bytes")
+            print(f"   - Upload time: {properties.last_modified}")
             
         except Exception as e:
             pytest.fail(f"CSV processing workflow failed: {str(e)}")

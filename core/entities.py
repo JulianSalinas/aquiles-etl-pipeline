@@ -1,11 +1,10 @@
-import datetime
-import decimal
 from typing import List, Optional
 
-from sqlalchemy import BINARY, DECIMAL, BigInteger, Boolean, Column, DateTime, ForeignKeyConstraint, Identity, Index, Integer, PrimaryKeyConstraint, Table, Unicode
+from sqlalchemy import BINARY, BigInteger, Boolean, Column, DECIMAL, DateTime, ForeignKeyConstraint, Identity, Index, Integer, LargeBinary, PrimaryKeyConstraint, Table, Unicode
 from sqlalchemy.dialects.mssql import DATETIME2
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
+import datetime
+import decimal
 
 class Base(DeclarativeBase):
     pass
@@ -41,6 +40,7 @@ class Provider(Base):
     __tablename__ = 'Provider'
     __table_args__ = (
         PrimaryKeyConstraint('Id', name='PK_Provider'),
+        Index('IX_Provider_Name', 'Name')
     )
 
     Id: Mapped[int] = mapped_column(Integer, Identity(start=1, increment=1), primary_key=True)
@@ -102,16 +102,18 @@ class Product(Base):
     __tablename__ = 'Product'
     __table_args__ = (
         ForeignKeyConstraint(['UnitOfMeasureId'], ['UnitOfMeasure.Id'], name='FK_Product_UnitOfMeasure'),
-        PrimaryKeyConstraint('Id', name='PK_Product')
+        PrimaryKeyConstraint('Id', name='PK_Product'),
+        Index('IX_Product_DescriptionHash', 'DescriptionHash')
     )
 
     Id: Mapped[int] = mapped_column(Integer, Identity(start=1, increment=1), primary_key=True)
-    Price: Mapped[decimal.Decimal] = mapped_column(DECIMAL(18, 2))
+    UnitPrice: Mapped[decimal.Decimal] = mapped_column(DECIMAL(18, 2))
     Description: Mapped[Optional[str]] = mapped_column(Unicode(collation='SQL_Latin1_General_CP1_CI_AS'))
     Measure: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(18, 2))
     UnitOfMeasureId: Mapped[Optional[int]] = mapped_column(Integer)
     CreatedDt: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
     UpdatedDt: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime)
+    DescriptionHash: Mapped[Optional[bytes]] = mapped_column(LargeBinary(32))
 
     UnitOfMeasure_: Mapped[Optional['UnitOfMeasure']] = relationship('UnitOfMeasure', back_populates='Product')
     Provider_Product: Mapped[List['ProviderProduct']] = relationship('ProviderProduct', back_populates='Product_')

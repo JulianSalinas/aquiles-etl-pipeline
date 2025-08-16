@@ -5,24 +5,24 @@ import base64
 import io
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 import pandas as pd
-from openai import AzureOpenAI
 from azure.storage.blob import BlobServiceClient
+from openai import AzureOpenAI
+from openai.types.beta.threads import ImageURLParam
+from openai.types.chat import ChatCompletion, ChatCompletionContentPartImageParam, ChatCompletionContentPartParam, ChatCompletionContentPartTextParam, ChatCompletionUserMessageParam
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 from core.entities import ProcessFile, ProviderSynonym, UnitOfMeasure
 
-from .data_processor import (apply_transformations,
-                             map_columns_to_apply_transformations)
+from .data_processor import apply_transformations, map_columns_to_apply_transformations
 from .database import create_azure_sql_engine, ensure_connection_established
-from .storage import (get_blob_service_client, read_blob_content,
-                      upload_blob_content)
+from .storage import get_blob_service_client, read_blob_content
 
 
 @dataclass
@@ -57,7 +57,7 @@ def check_process_file_status(engine: Engine, container: str, filename: str) -> 
         raise
 
 
-def normalize_to_staging_tables_from_dataframe(engine: Engine, df: pd.DataFrame, batch_guid: str):
+def load_data_to_staging_tables(engine: Engine, df: pd.DataFrame, batch_guid: str):
     """Normalize data from DataFrame into staging tables. """
 
     if df.empty:
@@ -65,75 +65,12 @@ def normalize_to_staging_tables_from_dataframe(engine: Engine, df: pd.DataFrame,
         return
     
     try:
+        providers_inserted: int = insert_providers_to_staging(engine, df, batch_guid)
 
-        normalize_df_step1: pd.DataFrame = df.copy()
+        products_inserted: int = insert_products_to_staging(engine, df, batch_guid)
 
-        provider_synonyms_df: pd.DataFrame = get_provider_synonyms_df(engine)
+        provider_products_inserted: int = insert_provider_products_to_staging(engine, df, batch_guid)
 
-        normalize_df_step1 = normalize_df_step1.join(other=provider_synonyms_df, on='ProviderName', how='left')
-
-        units_of_measure_df: pd.DataFrame = get_units_of_measure_df(engine)
-
-        normalize_df_step1 = normalize_df_step1.join(other=units_of_measure_df, on='UnitOfMeasure', how='left')
-
-        # Prepare provider data
-        unique_providers = df['CleanProviderName'].dropna().unique()
-
-        providers_inserted: int = 0
-
-        if len(unique_providers) > 0:
-            providers_df = pd.DataFrame({'Name': unique_providers, 'BatchGuid': batch_guid})
-            providers_df.to_sql('Provider', engine, schema='Staging', if_exists='append', index=False)
-            providers_inserted = len(unique_providers)
-
-        # Prepare product data
-        product_df: pd.DataFrame = df[['CleanDescription', 'RawDescription', 'CleanPrice', 'Measure', 'UnitOfMeasure']].copy()
-        product_df: pd.DataFrame = product_df.dropna(subset=['CleanDescription'])  # type: ignore
-
-        units_of_measure_df: pd.DataFrame
-        with Session(engine) as session:
-            units_of_measure = session.query(UnitOfMeasure).all()
-            data: list[dict[str, Any]] = [{ "Acronym": uom.Acronym,  "Id": uom.Id } for uom in units_of_measure]
-            units_of_measure_df = pd.DataFrame(data)
-
-        products_inserted: int = 0
-
-        if not product_df.empty:
-
-            product_df.join(units_of_measure_df.set_index('Acronym'), on='UnitOfMeasure', how='left')
-
-            # Prepare for staging
-            product_staging_df = pd.DataFrame({
-                'ProductName': product_df['CleanDescription'],
-                'Description': product_df['RawDescription'],
-                'Price': product_df['CleanPrice'],
-                'Measure': product_df['Measure'],
-                'UnitOfMeasureId': product_df['UnitOfMeasureId'],
-                'BatchGuid': batch_guid
-            })
-            
-            product_staging_df.to_sql('Product', engine, schema='Staging', if_exists='append', index=False)
-            products_inserted = len(product_staging_df)
-            
-        # Prepare provider_product data  
-        provider_product_df = df[['CleanLastReviewDt', 'PackageUnits', 'PercentageIVA']].copy()
-        
-        if not provider_product_df.empty:
-            provider_product_staging_df = pd.DataFrame({
-                'ProductId': 0,  # Will be updated in merge process
-                'ProviderId': 0,  # Will be updated in merge process  
-                'LastReviewDt': provider_product_df['CleanLastReviewDt'],
-                'PackageUnits': provider_product_df['PackageUnits'],
-                'IVA': provider_product_df['PercentageIVA'],
-                'IsValidated': 0,
-                'BatchGuid': batch_guid
-            })
-            
-            provider_product_staging_df.to_sql('Provider_Product', engine, schema='Staging', if_exists='append', index=False)
-            provider_products_inserted = len(provider_product_staging_df)
-        else:
-            provider_products_inserted = 0
-            
         logging.info(f"Normalized data to staging tables - Providers: {providers_inserted}, Products: {products_inserted}, Provider_Products: {provider_products_inserted}")
 
     except Exception as e:
@@ -170,6 +107,59 @@ def get_units_of_measure_df(engine: Engine) -> pd.DataFrame:
 
         return units_of_measure_df
 
+def insert_providers_to_staging(engine: Engine, products_df: pd.DataFrame, batch_guid: str) -> int:
+
+    unique_providers = products_df['CleanProviderName'].dropna().unique()
+
+    providers_inserted: int = 0
+
+    if len(unique_providers) > 0:
+        providers_df = pd.DataFrame({'Name': unique_providers, 'BatchGuid': batch_guid})
+        providers_df.to_sql('Provider', engine, schema='Staging', if_exists='append', index=False)
+        providers_inserted = len(unique_providers)
+
+    return providers_inserted
+
+
+def insert_products_to_staging(engine: Engine, products_df: pd.DataFrame, batch_guid: str) -> int:
+
+    product_df: pd.DataFrame = products_df[['RawDescription', 'CleanPrice', 'Measure', 'UnitOfMeasure']].copy()
+
+    if product_df.empty: return 0
+
+    product_staging_df = pd.DataFrame({
+        'Description': product_df['RawDescription'],
+        'UnitPrice': product_df['CleanPrice'].fillna(0), # type: ignore
+        'Measure': product_df['Measure'],
+        'UnitOfMeasure': product_df['UnitOfMeasure'],
+        'BatchGuid': batch_guid
+    })
+    
+    product_staging_df.to_sql('Product', engine, schema='Staging', if_exists='append', index=False)
+
+    return len(product_staging_df)
+
+
+def insert_provider_products_to_staging(engine: Engine, products_df: pd.DataFrame, batch_guid: str) -> int:
+
+    provider_product_df: pd.DataFrame = products_df[['CleanLastReviewDt', 'PackageUnits', 'PercentageIVA']].copy()
+
+    if provider_product_df.empty: return 0
+
+    provider_product_staging_df = pd.DataFrame({
+        'ProductId': 0,  # Will be updated in merge process
+        'ProviderId': 0,  # Will be updated in merge process  
+        'LastReviewDt': provider_product_df['CleanLastReviewDt'],
+        'PackageUnits': provider_product_df['PackageUnits'],
+        'IVA': provider_product_df['PercentageIVA'],
+        'IsValidated': 0,
+        'BatchGuid': batch_guid
+    })
+        
+    provider_product_staging_df.to_sql('Provider_Product', engine, schema='Staging', if_exists='append', index=False)
+    
+    return len(provider_product_staging_df)
+            
 
 def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
     """Merge data from staging tables to fact tables using SQL MERGE statements."""
@@ -192,7 +182,7 @@ def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
                     FROM Staging.Product sp
                     WHERE sp.BatchGuid = :batch_guid
                 ) AS source
-                ON target.ProductName = source.ProductName
+                ON target.Description = source.ProductName
                 WHEN MATCHED THEN
                     UPDATE SET 
                         Description = source.Description,
@@ -201,8 +191,8 @@ def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
                         UnitOfMeasureId = source.UnitOfMeasureId,
                         UpdatedDt = GETDATE()
                 WHEN NOT MATCHED THEN
-                    INSERT (ProductName, Description, Price, Measure, UnitOfMeasureId, CreatedDt, UpdatedDt)
-                    VALUES (source.ProductName, source.Description, source.Price, source.Measure, source.UnitOfMeasureId, GETDATE(), GETDATE());
+                    INSERT (Description, Price, Measure, UnitOfMeasureId, CreatedDt, UpdatedDt)
+                    VALUES (source.Description, source.Price, source.Measure, source.UnitOfMeasureId, GETDATE(), GETDATE());
             """)
             conn.execute(merge_products_sql, {"batch_guid": batch_guid})
             merge_provider_product_sql = text("""
@@ -217,7 +207,7 @@ def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
                         spp.IsValidated
                     FROM Staging.Provider_Product spp
                     INNER JOIN Staging.Product sp ON spp.BatchGuid = sp.BatchGuid
-                    INNER JOIN Product p ON p.ProductName = sp.ProductName
+                    INNER JOIN Product p ON p.Description = sp.Description
                     INNER JOIN Staging.Provider spr ON spp.BatchGuid = spr.BatchGuid  
                     INNER JOIN Provider pr ON pr.Name = spr.Name
                     WHERE spp.BatchGuid = :batch_guid
@@ -242,83 +232,87 @@ def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
 
 def extract_invoice_data_with_openai(image_content: bytes, image_name: str) -> pd.DataFrame:
     """Extract invoice data from image using Azure OpenAI."""
-    # Get OpenAI configuration from environment variables
-    openai_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
-    openai_key = os.environ.get('AZURE_OPENAI_KEY')
-    openai_model = os.environ.get('AZURE_OPENAI_MODEL', 'gpt-4-vision-preview')
     
-    # Get configurable parameters from environment variables
-    prompt = os.environ.get('OPENAI_PROMPT', """
-        Extract product information from this invoice. Return CSV format with columns:
-        Producto,Provedor,Precio,Porcentaje de IVA
-        
-        Include header row. Example:
-        Producto,Provedor,Precio,Porcentaje de IVA
-        Product Name,Provider Name,100.00,19
-        
-        Return only CSV data.
-    """)
-    max_tokens = int(os.environ.get('OPENAI_MAX_TOKENS', '800'))
-    temperature = float(os.environ.get('OPENAI_TEMPERATURE', '0.1'))
+    openai_endpoint: str | None = os.environ.get('AZURE_OPENAI_ENDPOINT')
+
+    if not openai_endpoint:
+        raise ValueError("Azure OpenAI endpoint not found. Set AZURE_OPENAI_ENDPOINT environment variable.")
     
-    if not openai_endpoint or not openai_key:
-        raise ValueError("Azure OpenAI configuration not found. Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_KEY environment variables.")
+    openai_key: str | None = os.environ.get('AZURE_OPENAI_KEY')
+
+    if not openai_key:
+        raise ValueError("Azure OpenAI key not found. Set AZURE_OPENAI_KEY environment variable.")
+
+    api_version: str = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-02-15-preview')
+
+    openai_model: str | None = os.environ.get('AZURE_OPENAI_MODEL', 'gpt-4-vision-preview')
+
+    prompt: str | None = os.environ.get('OPENAI_PROMPT')
     
-    encoded_image = base64.b64encode(image_content).decode('utf-8')
+    if not prompt:
+        raise ValueError("OpenAI prompt not found. Set OPENAI_PROMPT environment variable.")
+
+    max_tokens: int = int(os.environ.get('OPENAI_MAX_TOKENS', '800'))
+    temperature: float = float(os.environ.get('OPENAI_TEMPERATURE', '0.1'))
+
+    encoded_image: str = base64.b64encode(image_content).decode('utf-8')
     
-    # Initialize Azure OpenAI client
     client = AzureOpenAI(
         azure_endpoint=openai_endpoint,
         api_key=openai_key,
-        api_version="2024-02-15-preview"
+        api_version=api_version
+    )
+
+    image_url: ImageURLParam = ImageURLParam(url=f"data:image/jpeg;base64,{encoded_image}")
+
+    contentPartText: ChatCompletionContentPartTextParam = ChatCompletionContentPartTextParam(
+        type="text",
+        text=prompt
+    )
+
+    contentPartImage: ChatCompletionContentPartImageParam = ChatCompletionContentPartImageParam(
+        type="image_url",
+        image_url=image_url
+    )
+
+    userMessageContent: list[ChatCompletionContentPartParam] = [
+        contentPartText,
+        contentPartImage
+    ]
+
+    userMessage: ChatCompletionUserMessageParam = ChatCompletionUserMessageParam(
+        role="user",
+        content=userMessageContent
     )
     
     # Make API request using OpenAI library
     try:
-        response = client.chat.completions.create(
+        response: ChatCompletion = client.chat.completions.create(
             model=openai_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{encoded_image}"
-                            }
-                        }
-                    ]
-                }
-            ],
+            messages=[userMessage],
             max_tokens=max_tokens,
             temperature=temperature
         )
         
-        content = response.choices[0].message.content
-        
-        try:
-            # Clean the response to remove any markdown formatting
-            csv_content = content.strip()
+        content: str | None = response.choices[0].message.content
 
-            if '```' in csv_content:
-                # Remove markdown code blocks if present
-                csv_content = csv_content.split('```')[1].strip()
-                if csv_content.startswith('csv'):
-                    csv_content = csv_content[3:].strip()
-            
-            # Parse CSV into DataFrame
-            df: pd.DataFrame = pd.read_csv(io.StringIO(csv_content)) # type: ignore
+        if not content:
+            raise ValueError("No content returned from OpenAI API")
 
-            logging.info(f"Extracted {len(df)} products from invoice {image_name} using Azure OpenAI")
+        csv_content: str = content.strip()
 
-            return df
-        
-        except Exception as parse_error:
-            raise ValueError(f"Failed to parse OpenAI response as CSV: {str(parse_error)}. Response: {content[:200]}...")
+        # Remove markdown code block (```csv ... ```) using regex
+        match = re.search(r"```(?:csv)?\s*(.*?)```", csv_content, re.DOTALL | re.IGNORECASE)
+
+        if match:
+            csv_content = match.group(1).strip()
+
+        # Parse CSV into DataFrame
+        df: pd.DataFrame = pd.read_csv(io.StringIO(csv_content)) # type: ignore
+
+        logging.info(f"Extracted {len(df)} products from invoice {image_name} using Azure OpenAI")
+
+        return df
             
     except Exception as api_error:
         raise ValueError(f"OpenAI API request failed: {str(api_error)}")
@@ -326,12 +320,26 @@ def extract_invoice_data_with_openai(image_content: bytes, image_name: str) -> p
 
 def process_csv_from_stream(csv_data: bytes, blob_name: str, server_name: str, database_name: str) -> ProcessingResult:
     """Internal function to process CSV data (common logic for both blob and stream processing)"""
+
+    container = "products-dev"
+
+    pf = ProcessFile(
+        Container=container,
+        FileName=blob_name,
+        StatusId=2,  # In Progress
+        ProcessDt=datetime.now(),
+        BlobSize=len(csv_data),
+        ContentType="text/csv",
+        CreatedDt=datetime.now(),
+        LastModifiedDt=datetime.now(),
+        ETag=None,
+        Metadata="{}"
+    )
+    
     try:
         engine: Engine = create_azure_sql_engine(server_name, database_name)
 
         ensure_connection_established(engine)
-        
-        container = "products-dev"
 
         file_status: int = check_process_file_status(engine, container, blob_name)
         
@@ -339,19 +347,6 @@ def process_csv_from_stream(csv_data: bytes, blob_name: str, server_name: str, d
             message: str = f"File {blob_name} already processed successfully (Status 3), skipped"
             logging.info(message)
             return ProcessingResult(status=True, message=message)
-
-        pf = ProcessFile(
-            Container=container,
-            FileName=blob_name,
-            StatusId=2,  # In Progress
-            ProcessDt=datetime.now(),
-            BlobSize=len(csv_data),
-            ContentType="text/csv",
-            CreatedDt=datetime.now(),
-            LastModifiedDt=datetime.now(),
-            ETag=None,
-            Metadata="{}"
-        )
 
         with Session(engine) as session:
             session.add(pf)
@@ -368,7 +363,7 @@ def process_csv_from_stream(csv_data: bytes, blob_name: str, server_name: str, d
         
         batch_guid = str(uuid.uuid4())
         
-        normalize_to_staging_tables_from_dataframe(engine, transformed_df, batch_guid)
+        load_data_to_staging_tables(engine, transformed_df, batch_guid)
         
         merge_staging_to_fact_tables(engine, batch_guid)
         
@@ -382,9 +377,17 @@ def process_csv_from_stream(csv_data: bytes, blob_name: str, server_name: str, d
         return ProcessingResult(status=True, message=success_message)
 
     except Exception as e:
-        ## TODO: Update ProcessFile status to 4 = Failed
+
+        engine: Engine = create_azure_sql_engine(server_name, database_name)
+
+        with Session(engine) as session:
+            pf.StatusId = 4
+            session.commit()
+        
         error_message = f"ETL process failed for blob {blob_name}: {str(e)}"
+
         logging.error(error_message)
+
         return ProcessingResult(status=False, message=error_message)
 
 def process_csv_from_blob(storage_account_name: str, container_name: str, blob_name: str, server_name: str, database_name: str) -> ProcessingResult:
@@ -410,18 +413,19 @@ def process_invoice_image(image_content: bytes, image_name: str, server_name: st
         logging.info(f"Starting invoice processing for image: {image_name}")
         
         products_data: pd.DataFrame = extract_invoice_data_with_openai(image_content, image_name)
-        
-        # Apply transformations to prepare data for database
+
         df = map_columns_to_apply_transformations(products_data)
+        
         transformed_df: pd.DataFrame = apply_transformations(df)
         
-        # Create database engine and process data
         engine: Engine = create_azure_sql_engine(server_name, database_name)
+
         ensure_connection_established(engine)
         
         batch_guid = str(uuid.uuid4())
         
-        normalize_to_staging_tables_from_dataframe(engine, transformed_df, batch_guid)
+        load_data_to_staging_tables(engine, transformed_df, batch_guid)
+
         merge_staging_to_fact_tables(engine, batch_guid)
         
         logging.info(f"Invoice processing completed successfully for: {image_name}")

@@ -18,9 +18,9 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     """
     req_body: Any = req.get_json()
 
-    container_name: str = req_body.get('container') | 'unknown-container'
+    container_name: str = req_body.get('container') or 'unknown-container'
 
-    blob_name: str = req_body.get('blob') | 'unknown-blob'
+    blob_name: str = req_body.get('blob') or 'unknown-blob'
 
     try:
         storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')

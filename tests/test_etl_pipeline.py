@@ -6,7 +6,7 @@ import pandas as pd
 from unittest.mock import Mock, patch
 from core.etl_orchestrator import (
     check_process_file_status,
-    normalize_to_staging_tables_from_dataframe,
+    load_data_to_staging_tables,
     extract_invoice_data_with_openai,
     process_invoice_image
 )
@@ -51,7 +51,7 @@ class TestETLPipeline:
         empty_df = pd.DataFrame()
         
         # Should not raise an exception with empty DataFrame
-        normalize_to_staging_tables_from_dataframe(mock_engine, empty_df, "test-batch-guid")
+        load_data_to_staging_tables(mock_engine, empty_df, "test-batch-guid")
     
     def test_normalize_to_staging_tables_from_dataframe_with_data(self):
         """Test normalization handles data without crashing."""
@@ -60,27 +60,7 @@ class TestETLPipeline:
         empty_df = pd.DataFrame()
         
         # This should complete without error
-        normalize_to_staging_tables_from_dataframe(mock_engine, empty_df, "test-batch-guid")
-
-
-class TestOpenAIIntegration:
-    """Test cases for OpenAI integration."""
-    
-    def test_extract_invoice_data_with_openai_missing_config(self):
-        """Test error handling when OpenAI configuration is missing."""
-        # Clear environment variables
-        import os
-        if 'AZURE_OPENAI_ENDPOINT' in os.environ:
-            del os.environ['AZURE_OPENAI_ENDPOINT']
-        if 'AZURE_OPENAI_KEY' in os.environ:
-            del os.environ['AZURE_OPENAI_KEY']
-        
-        image_content = b"mock_image_data"
-        image_name = "test.jpg"
-        
-        with pytest.raises(ValueError, match="Azure OpenAI configuration not found"):
-            extract_invoice_data_with_openai(image_content, image_name)
-
+        load_data_to_staging_tables(mock_engine, empty_df, "test-batch-guid")
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

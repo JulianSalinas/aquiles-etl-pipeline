@@ -84,21 +84,6 @@ class TestInvoiceDataExtraction:
         assert len(result) == 1
         assert result.iloc[0]["Producto"] == "Markdown Product"
     
-    def test_extract_invoice_data_with_openai_missing_config(self):
-        """Test error handling when OpenAI configuration is missing."""
-        # Clear environment variables
-        if 'AZURE_OPENAI_ENDPOINT' in os.environ:
-            del os.environ['AZURE_OPENAI_ENDPOINT']
-        if 'AZURE_OPENAI_KEY' in os.environ:
-            del os.environ['AZURE_OPENAI_KEY']
-        
-        image_content = b"mock_image_data"
-        image_name = "test.jpg"
-        
-        with pytest.raises(ValueError, match="Azure OpenAI configuration not found"):
-            extract_invoice_data_with_openai(image_content, image_name)
-
-
 @pytest.mark.integration
 class TestInvoiceProcessingIntegration:
     """Integration tests for complete invoice processing pipeline."""

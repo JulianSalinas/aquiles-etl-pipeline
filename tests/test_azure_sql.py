@@ -49,11 +49,13 @@ def azure_sql_engine():
 class TestAzureADConnection:
     """Tests for Azure AD authentication and database access."""
     
-    def test_azure_sql_connection_successful(self, azure_sql_engine):
+    def test_azure_sql_connection_successful(self, azure_sql_engine: "sqlalchemy.engine.Engine"):
         """Test that Azure AD authentication works and connection is successful."""
-        result = ensure_connection_established(azure_sql_engine)
-        assert result is not None, "Connection should be successful"
-        print(f"✅ Connection successful: {result}")
+        try:
+            ensure_connection_established(azure_sql_engine)
+            print(f"✅ Connection successful")
+        except Exception as e:
+            pytest.fail(f"Connection failed with exception: {e}")
     
     def test_database_has_tables(self, azure_sql_engine):
         """Test that the database contains tables."""
