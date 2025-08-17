@@ -130,7 +130,7 @@ def insert_products_to_staging(engine: Engine, products_df: pd.DataFrame, batch_
 
     product_staging_df = pd.DataFrame({
         'Description': product_df['RawDescription'],
-        'UnitPrice': product_df['CleanPrice'].fillna(0), # type: ignore
+        'UnitPrice': 0,  # type: ignore
         'Measure': product_df['Measure'],
         'UnitOfMeasure': product_df['UnitOfMeasure'],
         'BatchGuid': batch_guid
@@ -155,7 +155,7 @@ def insert_provider_products_to_staging(engine: Engine, products_df: pd.DataFram
         'IVA': provider_product_df['PercentageIVA'],
         'ProductDescription': provider_product_df['RawDescription'],
         'ProviderName': provider_product_df['CleanProviderName'],
-        'CleanPrice': provider_product_df['CleanPrice'],
+        'Price': provider_product_df['CleanPrice'],
         'IsValidated': 0,
         'BatchGuid': batch_guid
     })
@@ -179,6 +179,10 @@ def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
             merge_provider_products_sp = text("EXEC usp_MergeProviderProductsFromStaging @BatchGuid = :batch_guid")
             conn.execute(merge_provider_products_sp, {"batch_guid": batch_guid})
             
+            conn.execute(text("DELETE FROM Staging.Product WHERE BatchGuid = :batch_guid"), {"batch_guid": batch_guid})
+            conn.execute(text("DELETE FROM Staging.Provider WHERE BatchGuid = :batch_guid"), {"batch_guid": batch_guid})
+            conn.execute(text("DELETE FROM Staging.Provider_Product WHERE BatchGuid = :batch_guid"), {"batch_guid": batch_guid})
+
             logging.info(f"Successfully merged staging data to fact tables for batch {batch_guid}")
     except Exception as e:
         logging.error(f"Error merging staging to fact tables: {str(e)}")
