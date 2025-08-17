@@ -112,11 +112,19 @@ def invoice_processor_blob_trigger(invoice_blob: func.InputStream):
         if not database_name:
             raise ValueError("SQL_DATABASE environment variable is not set")
 
+        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')
+
+        if not storage_account_name:
+            raise ValueError("STORAGE_ACCOUNT_NAME environment variable is not set")
+
         image_content = invoice_blob.read()
 
         assert isinstance(invoice_blob.name, str)
 
-        result: ProcessingResult = process_invoice_image(image_content, invoice_blob.name, server_name, database_name)
+        # Extract container name from the blob trigger path or use default
+        container = "invoices-dev"
+
+        result: ProcessingResult = process_invoice_image(storage_account_name, container, image_content, invoice_blob.name, server_name, database_name)
 
         if result.status == True:
             success_msg = f"Invoice processing completed successfully for: {invoice_blob.name}"

@@ -9,6 +9,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from io import StringIO
 
 import pandas as pd
 from azure.storage.blob import BlobServiceClient
@@ -22,7 +23,7 @@ from core.entities import ProcessFile, ProviderSynonym, UnitOfMeasure
 
 from .data_processor import apply_transformations, map_columns_to_apply_transformations
 from .database import create_azure_sql_engine, ensure_connection_established
-from .storage import get_blob_service_client, read_blob_content
+from .storage import get_blob_service_client, read_blob_content, upload_blob_content
 
 
 @dataclass
@@ -142,7 +143,7 @@ def insert_products_to_staging(engine: Engine, products_df: pd.DataFrame, batch_
 
 def insert_provider_products_to_staging(engine: Engine, products_df: pd.DataFrame, batch_guid: str) -> int:
 
-    provider_product_df: pd.DataFrame = products_df[['CleanLastReviewDt', 'PackageUnits', 'PercentageIVA']].copy()
+    provider_product_df: pd.DataFrame = products_df[['CleanLastReviewDt', 'PackageUnits', 'PercentageIVA', 'RawDescription', 'CleanProviderName', 'CleanPrice']].copy()
 
     if provider_product_df.empty: return 0
 
@@ -152,6 +153,9 @@ def insert_provider_products_to_staging(engine: Engine, products_df: pd.DataFram
         'LastReviewDt': provider_product_df['CleanLastReviewDt'],
         'PackageUnits': provider_product_df['PackageUnits'],
         'IVA': provider_product_df['PercentageIVA'],
+        'ProductDescription': provider_product_df['RawDescription'],
+        'ProviderName': provider_product_df['CleanProviderName'],
+        'CleanPrice': provider_product_df['CleanPrice'],
         'IsValidated': 0,
         'BatchGuid': batch_guid
     })
@@ -162,68 +166,19 @@ def insert_provider_products_to_staging(engine: Engine, products_df: pd.DataFram
             
 
 def merge_staging_to_fact_tables(engine: Engine, batch_guid: str):
-    """Merge data from staging tables to fact tables using SQL MERGE statements."""
+    """Merge data from staging tables to fact tables using stored procedures."""
     try:
-        # DML/merge is not supported by ORM, so we keep raw SQL but use engine.begin()
         with engine.begin() as conn:
-            merge_providers_sql = text("""
-                MERGE Provider AS target
-                USING (SELECT DISTINCT Name FROM Staging.Provider WHERE BatchGuid = :batch_guid) AS source
-                ON target.Name = source.Name
-                WHEN NOT MATCHED THEN
-                    INSERT (Name, CreateDt)
-                    VALUES (source.Name, GETDATE());
-            """)
-            conn.execute(merge_providers_sql, {"batch_guid": batch_guid})
-            merge_products_sql = text("""
-                MERGE Product AS target
-                USING (
-                    SELECT sp.ProductName, sp.Description, sp.Price, sp.Measure, sp.UnitOfMeasureId
-                    FROM Staging.Product sp
-                    WHERE sp.BatchGuid = :batch_guid
-                ) AS source
-                ON target.Description = source.ProductName
-                WHEN MATCHED THEN
-                    UPDATE SET 
-                        Description = source.Description,
-                        Price = source.Price,
-                        Measure = source.Measure,
-                        UnitOfMeasureId = source.UnitOfMeasureId,
-                        UpdatedDt = GETDATE()
-                WHEN NOT MATCHED THEN
-                    INSERT (Description, Price, Measure, UnitOfMeasureId, CreatedDt, UpdatedDt)
-                    VALUES (source.Description, source.Price, source.Measure, source.UnitOfMeasureId, GETDATE(), GETDATE());
-            """)
-            conn.execute(merge_products_sql, {"batch_guid": batch_guid})
-            merge_provider_product_sql = text("""
-                MERGE Provider_Product AS target
-                USING (
-                    SELECT 
-                        p.Id as ProductId,
-                        pr.Id as ProviderId,
-                        spp.LastReviewDt,
-                        spp.PackageUnits,
-                        spp.IVA,
-                        spp.IsValidated
-                    FROM Staging.Provider_Product spp
-                    INNER JOIN Staging.Product sp ON spp.BatchGuid = sp.BatchGuid
-                    INNER JOIN Product p ON p.Description = sp.Description
-                    INNER JOIN Staging.Provider spr ON spp.BatchGuid = spr.BatchGuid  
-                    INNER JOIN Provider pr ON pr.Name = spr.Name
-                    WHERE spp.BatchGuid = :batch_guid
-                ) AS source
-                ON target.ProductId = source.ProductId AND target.ProviderId = source.ProviderId
-                WHEN MATCHED THEN
-                    UPDATE SET 
-                        LastReviewDt = source.LastReviewDt,
-                        PackageUnits = source.PackageUnits,
-                        IVA = source.IVA,
-                        IsValidated = source.IsValidated
-                WHEN NOT MATCHED THEN
-                    INSERT (ProductId, ProviderId, LastReviewDt, PackageUnits, IVA, IsValidated)
-                    VALUES (source.ProductId, source.ProviderId, source.LastReviewDt, source.PackageUnits, source.IVA, source.IsValidated);
-            """)
-            conn.execute(merge_provider_product_sql, {"batch_guid": batch_guid})
+            
+            merge_providers_sp = text("EXEC usp_MergeProvidersFromStaging @BatchGuid = :batch_guid")
+            conn.execute(merge_providers_sp, {"batch_guid": batch_guid})
+            
+            merge_products_sp = text("EXEC usp_MergeProductsFromStaging @BatchGuid = :batch_guid")
+            conn.execute(merge_products_sp, {"batch_guid": batch_guid})
+            
+            merge_provider_products_sp = text("EXEC usp_MergeProviderProductsFromStaging @BatchGuid = :batch_guid")
+            conn.execute(merge_provider_products_sp, {"batch_guid": batch_guid})
+            
             logging.info(f"Successfully merged staging data to fact tables for batch {batch_guid}")
     except Exception as e:
         logging.error(f"Error merging staging to fact tables: {str(e)}")
@@ -407,12 +362,26 @@ def process_csv_from_blob(storage_account_name: str, container_name: str, blob_n
         return ProcessingResult(status=False, message=error_message)
 
 
-def process_invoice_image(image_content: bytes, image_name: str, server_name: str, database_name: str) -> ProcessingResult:
+def process_invoice_image(storage_account_name: str, container_name: str, image_content: bytes, image_name: str, server_name: str, database_name: str) -> ProcessingResult:
     """Complete invoice processing pipeline: extract data from image and write directly to database."""
     try:
         logging.info(f"Starting invoice processing for image: {image_name}")
         
         products_data: pd.DataFrame = extract_invoice_data_with_openai(image_content, image_name)
+
+        batch_guid = str(uuid.uuid4())
+
+        blob_service_client: BlobServiceClient = get_blob_service_client(storage_account_name)
+        
+        csv_filename: str = f"{os.path.splitext(image_name)[0]}_{batch_guid[:8]}.csv"
+
+        csv_buffer = StringIO()
+        products_data.to_csv(csv_buffer, index=False)
+        csv_buffer.seek(0)
+
+        upload_blob_content(blob_service_client, container_name, csv_filename, csv_buffer, content_type="text/csv")
+
+        logging.info(f"CSV saved to {container_name}/{csv_filename}")
 
         df = map_columns_to_apply_transformations(products_data)
         
@@ -421,8 +390,6 @@ def process_invoice_image(image_content: bytes, image_name: str, server_name: st
         engine: Engine = create_azure_sql_engine(server_name, database_name)
 
         ensure_connection_established(engine)
-        
-        batch_guid = str(uuid.uuid4())
         
         load_data_to_staging_tables(engine, transformed_df, batch_guid)
 
@@ -434,8 +401,8 @@ def process_invoice_image(image_content: bytes, image_name: str, server_name: st
             status=True,
             message=f"Invoice processing completed successfully for: {image_name}",
             products_extracted=len(products_data),
-            csv_filename=None,
-            output_container=None
+            csv_filename=csv_filename,
+            output_container=container_name
         )
         
     except Exception as e:

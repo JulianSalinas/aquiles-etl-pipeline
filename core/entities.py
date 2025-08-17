@@ -162,6 +162,7 @@ class ProviderProduct(Base):
     LastReviewDt: Mapped[Optional[datetime.datetime]] = mapped_column(DATETIME2)
     PackageUnits: Mapped[Optional[int]] = mapped_column(Integer)
     IVA: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(18, 2))
+    Price: Mapped[Optional[decimal.Decimal]] = mapped_column(DECIMAL(18, 2))
 
     Product_: Mapped['Product'] = relationship('Product', back_populates='Provider_Product')
     Provider_: Mapped['Provider'] = relationship('Provider', back_populates='Provider_Product')
