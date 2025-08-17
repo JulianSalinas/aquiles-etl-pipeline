@@ -107,6 +107,7 @@ def map_columns_to_apply_transformations(df: pd.DataFrame) -> pd.DataFrame:
     column_mapping: dict[str, str] = {
         'Producto': 'Description',
         'Fecha 1': 'LastReviewDt', 
+        'Fecha': 'LastReviewDt', 
         'Provedor': 'ProviderName',
         'Precio': 'Price',
         "IVA": "PercentageIVA",

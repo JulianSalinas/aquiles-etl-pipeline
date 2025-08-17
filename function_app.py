@@ -6,23 +6,32 @@ import azure.functions as func
 
 from core.etl_orchestrator import (ProcessingResult, process_csv_from_blob,
                                    process_csv_from_stream,
-                                   process_invoice_image)
+                                   process_invoice_image, process_csv_string)
 
 app = func.FunctionApp()
 
-@app.route(route="process-csv", methods=["POST"])
-def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+@app.route(route="csv-from-blob", methods=["POST"])
+def provider24_from_csv_blob_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     """
     HTTP triggered function to process CSV files from Azure Blob Storage.
     Expects JSON body with: {"container": "container-name", "blob": "blob-name.csv"}
     """
-    req_body: Any = req.get_json()
-
-    container_name: str = req_body.get('container') or 'unknown-container'
-
-    blob_name: str = req_body.get('blob') or 'unknown-blob'
-
     try:
+        req_body: Any = req.get_json()
+
+        if not req_body:
+            return func.HttpResponse("Request body is required", status_code=400)
+
+        blob_name: str = req_body.get('blob')
+
+        if not blob_name:
+            return func.HttpResponse("blob is required in request body", status_code=400)
+
+        container_name: str = req_body.get('container')
+
+        if not container_name:
+            return func.HttpResponse("container is required in request body", status_code=400)
+        
         storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')
 
         if not storage_account_name:
@@ -52,10 +61,61 @@ def provider24_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(error_msg, status_code=400)
 
     except Exception as e:
-        error_msg = f"Error processing blob {blob_name}: {str(e)}"
+        error_msg = f"Error processing blob: {str(e)}"
         logging.error(error_msg)
         return func.HttpResponse(error_msg, status_code=500)
-    
+
+@app.route(route="csv-from-string", methods=["POST"])
+def provider24_from_csv_string_http_trigger(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    HTTP triggered function to validate and upload CSV content.
+    Expects JSON body with: {"csv_content": "CSV string", "filename": "file.csv"}
+    """
+    try:
+        req_body: Any = req.get_json()
+        
+        if not req_body:
+            return func.HttpResponse("Request body is required", status_code=400)
+
+        csv_content: str = req_body.get('csv_content')
+
+        if not csv_content:
+            return func.HttpResponse("csv_content is required in request body", status_code=400)
+        
+        filename: str = req_body.get('filename')
+
+        if not filename:
+            return func.HttpResponse("filename is required in request body", status_code=400)
+        
+        if not filename.lower().endswith('.csv'):
+            return func.HttpResponse("filename must have .csv extension", status_code=400)
+
+        storage_account_name = os.environ.get('STORAGE_ACCOUNT_NAME')
+
+        if not storage_account_name:
+            raise ValueError("STORAGE_ACCOUNT_NAME environment variable is not set")
+
+        logging.info(f"CSV UPLOAD TRIGGER - Processing CSV upload: {filename}")
+
+        container_name: str = "invoices-csv-dev"
+
+        result: ProcessingResult = process_csv_string(storage_account_name, container_name, csv_content, filename)
+
+        if result.status:
+            success_msg = f"CSV upload completed successfully: {filename}"
+            logging.info(success_msg)
+            return func.HttpResponse(result.message, status_code=200)
+        else:
+            error_msg = f"CSV upload failed: {filename} - {result.message}"
+            logging.error(error_msg)
+            return func.HttpResponse(result.message, status_code=400)
+
+    except Exception as e:
+        error_msg = f"Error processing CSV upload: {str(e)}"
+        logging.error(error_msg)
+        return func.HttpResponse(error_msg, status_code=500)
+
+
 @app.blob_trigger(arg_name="myblob", path="products-dev", connection="provider24_STORAGE")  # type: ignore
 def provider24_elt_blob_trigger(myblob: func.InputStream):
     """

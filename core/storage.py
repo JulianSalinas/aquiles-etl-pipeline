@@ -8,7 +8,7 @@ from io import StringIO
 from azure.core.paging import ItemPaged
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import (BlobClient, BlobProperties, BlobServiceClient,
-                                ContainerClient, StorageStreamDownloader)
+                                ContainerClient, StorageStreamDownloader, ContentSettings)
 
 
 @dataclass
@@ -99,7 +99,9 @@ def upload_blob_content(blob_service_client: BlobServiceClient, container_name: 
     try:
         blob_client: BlobClient = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
 
-        blob_client.upload_blob(content, overwrite=True, content_settings={'content_type': content_type})
+        content_settings = ContentSettings(content_type=content_type)
+
+        blob_client.upload_blob(content, overwrite=True, content_settings=content_settings)
         
         logging.info(f"Successfully uploaded blob: {blob_name} to container: {container_name}")
 

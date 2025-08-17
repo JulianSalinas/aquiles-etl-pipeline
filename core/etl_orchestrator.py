@@ -413,3 +413,52 @@ def process_invoice_image(storage_account_name: str, container_name: str, image_
         error_message = f"Invoice processing failed for {image_name}: {str(e)}"
         logging.error(error_message)
         return ProcessingResult(status=False, message=error_message)
+
+
+def process_csv_string(storage_account_name: str, container_name: str, csv_content: str, filename: str) -> ProcessingResult:
+    """Process CSV string: validate format and upload to invoice-csv-dev container."""
+    try:
+        logging.info(f"Starting CSV string processing for file: {filename}")
+        
+        expected_headers: list[str] = ["Producto", "Fecha", "Provedor", "Precio", "IVA"]
+
+        csv_buffer = StringIO()
+        csv_buffer.write(csv_content)
+        csv_buffer.seek(0)
+
+        df: pd.DataFrame = pd.read_csv(csv_buffer) # type: ignore
+        
+        if df.empty:
+            raise ValueError("CSV content is empty")
+        
+        actual_headers: list[str] = df.columns.str.strip().tolist()
+
+        missing_headers: list[str] = [h for h in expected_headers if h not in actual_headers]
+        
+        if missing_headers:
+            raise ValueError(f"Missing required headers: {missing_headers}. Expected headers: {expected_headers}")
+        
+        extra_headers: list[str] = [h for h in actual_headers if h not in expected_headers]
+
+        if extra_headers:
+            logging.warning(f"Extra headers found (will be ignored): {extra_headers}")
+
+        if len(df) == 0:
+            raise ValueError("CSV file contains headers but no data rows")
+        
+        logging.info(f"CSV validation successful. Found {len(df)} data rows with required headers: {expected_headers}")
+
+        blob_service_client: BlobServiceClient = get_blob_service_client(storage_account_name)
+
+        upload_blob_content(blob_service_client, container_name, filename, csv_content, content_type="text/csv")
+
+        logging.info(f"CSV uploaded successfully to {container_name}/{filename}")
+
+        message: str = f"CSV validation and upload completed successfully. File: {filename}, Rows: {len(df)}, Container: {container_name}"
+
+        return ProcessingResult(status=True,  message=message)
+    
+    except Exception as e:
+        error_message = f"CSV processing failed for {filename}: {str(e)}"
+        logging.error(error_message)
+        return ProcessingResult(status=False, message=error_message)
